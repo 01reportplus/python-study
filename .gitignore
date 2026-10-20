@@ -88,7 +88,6 @@ __pycache__/
 *.py[cod]
 /.cache/
 /site/
-/Python完整教程.md
 *.db
 *.db-journal
 *.db-wal
