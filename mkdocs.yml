@@ -1,0 +1,110 @@
+site_name: Python 系统教程
+site_description: 面向已有 Go 和 Python 基础的开发者，从语言语义到工程实践的中文教程。
+site_url: !ENV [SITE_URL, 'http://127.0.0.1:8000/']
+docs_dir: docs
+site_dir: site
+use_directory_urls: true
+strict: true
+
+theme:
+  name: material
+  language: zh
+  font: false
+  icon:
+    logo: material/language-python
+  palette:
+    - media: '(prefers-color-scheme: light)'
+      scheme: default
+      primary: white
+      accent: blue
+      toggle:
+        icon: material/weather-night
+        name: 切换到深色模式
+    - media: '(prefers-color-scheme: dark)'
+      scheme: slate
+      primary: black
+      accent: light blue
+      toggle:
+        icon: material/weather-sunny
+        name: 切换到浅色模式
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+
+plugins:
+  - search:
+      lang: [zh, en]
+
+hooks:
+  - scripts/site_hooks.py
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra_css:
+  - assets/stylesheets/extra.css
+
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+  links:
+    not_found: warn
+    anchors: warn
+    unrecognized_links: warn
+
+nav:
+  - 首页: index.md
+  - 系统教程:
+      - 学习导读:
+          - 00 · 导读与学习路线: tutorial/00-导读与学习路线.md
+      - 语言基础:
+          - 01 · 环境与语法: tutorial/01-环境安装与基本语法.md
+          - 02 · 对象与类型: tutorial/02-对象模型与基础类型.md
+          - 03 · 容器与集合: tutorial/03-列表元组字典与集合.md
+          - 04 · 控制流: tutorial/04-控制流与模式匹配.md
+          - 05 · 函数与装饰器: tutorial/05-函数作用域与装饰器.md
+          - 06 · 迭代与生成器: tutorial/06-迭代器生成器与函数式工具.md
+          - 07 · 模块与依赖: tutorial/07-模块包与依赖管理.md
+      - 对象模型与工程:
+          - 08 · 面向对象: tutorial/08-面向对象与数据建模.md
+          - 09 · 协议与元编程: tutorial/09-协议描述符与元编程.md
+          - 10 · 类型提示: tutorial/10-类型提示与泛型.md
+          - 11 · 异常与资源: tutorial/11-异常与上下文管理.md
+          - 12 · 文件与数据: tutorial/12-文件编码与数据交换.md
+          - 13 · 常用标准库: tutorial/13-常用标准库详解.md
+      - 并发与实战:
+          - 14 · 线程、进程与异步: tutorial/14-线程进程与异步编程.md
+          - 15 · 网络与数据库: tutorial/15-网络数据库与Web开发.md
+          - 16 · 测试与工程质量: tutorial/16-测试调试性能与安全.md
+          - 17 · 任务管理器实战: tutorial/17-综合实战任务管理器.md
+      - 进阶与速查:
+          - 18 · 生态与扩展: tutorial/18-生态专题与扩展边界.md
+          - 19 · 练习与迁移陷阱: tutorial/19-练习答案与迁移陷阱.md
+          - 20 · 索引与参考资料: tutorial/20-知识点索引与参考资料.md
+          - 21 · 内置函数示例: tutorial/21-内置函数与标准库补充示例.md
+          - 22 · 高级机制与案例: tutorial/22-高级运行机制与设计案例.md
+  - 示例与下载: examples.md
+  - 站点维护:
+      - 构建与发布: deployment.md
+      - 教程验证记录: validation.md
