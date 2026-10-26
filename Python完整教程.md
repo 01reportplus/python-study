@@ -1,9 +1,9 @@
 # Python 系统教程：面向已有 Go 和 Python 基础的开发者（完整合订版）
 
-> 修订日期：2026-10-20。实际验证环境与范围见 docs/validation.md。
+> 修订日期：2026-10-26。实际验证环境与范围见 docs/validation.md。
 > 本文由分章文档自动汇总；修改请优先编辑 docs/tutorial/ 下的章节，再运行 scripts/build_book.py。
 
-本文覆盖语言核心、主要运行机制、常见标准库和工程路径；第三方生态提供入门示例和深入方向，不宣称逐项覆盖全部第三方 API 或解释器内部实现。
+本次补全以 Python 官方教程、语言参考和标准库为依据，聚焦语言基础、对象协议、工程组织与并发。已有第三方生态内容保留为可选扩展，不属于本次学习主线；不宣称逐项覆盖全部标准库 API 或解释器内部实现。
 
 [分章目录](README.md) · [验证记录](docs/validation.md)
 
@@ -110,6 +110,14 @@ assert result == 11
 
 ## 0.2 版本策略
 
+### 本次基础补全范围（2026-10-26）
+
+本次以 Python 官网教程为主线，以固定 3.14 系列的语言参考和标准库文档核对细节，重点补充对象关系、属性协议、工程组织、类型提示、异常与资源、线程/进程/asyncio 及运行机制。新增内容不引入框架，现有章节文件名、章标题和二级目录保持不变。
+
+只学 Python 基础时，主线为 **01—14、16、19—22**，第 17 章作为标准库综合实战；15 章选读 urllib/socket/sqlite3，18 章选读 18.9 的语言特性。其余已有第三方内容是可选历史扩展，不作为掌握对象模型和并发的前提。
+
+“补全”按教学主题衡量：既能找到规则，也能解释反例、执行时机和失败后的状态。官网教程本身不是标准库逐 API 全集，本书也不把所有函数签名堆成百科；[第 20 章](docs/tutorial/20-知识点索引与参考资料.md) 提供官方主题覆盖表和进一步查阅入口，[第 19 章](docs/tutorial/19-练习答案与迁移陷阱.md) 提供易混点对照与自测。
+
 本教程以本机实际可运行的 Python 3.14.5 验证示例，不把 `/3/` 在线文档所指版本当成你机器上的版本。在线文档会随 Python 发布变化；学习时优先选择与你解释器一致的版本。
 
 | 能力 | 起始版本 | 本教程位置 |
@@ -121,8 +129,9 @@ assert result == 11
 | `match`、`X \| None` | 3.10 | 04、10 |
 | `TaskGroup`、`except*`、`tomllib` | 3.11 | 11、12、14 |
 | `type Alias = ...`、类型参数语法 | 3.12 | 10 |
-| 可选自由线程构建 | 3.13 起 | 14 |
+| 可选自由线程构建、TypeIs、队列 shutdown | 3.13 起 | 10、14 |
 | 注解延迟求值、模板字符串 | 3.14 | 10、18 |
+| Executor.map 的 buffersize、InterpreterPoolExecutor | 3.14 | 14、22 |
 
 版本说明参考 [Python 3.14 新特性](https://docs.python.org/3/whatsnew/3.14.html)。不要把自由线程构建推断成“所有 Python 都没有 GIL”。
 
@@ -274,6 +283,24 @@ assert "整数元" in total.__doc__
 ```
 
 优先利用括号换行，避免行末反斜杠续行。`help(total)` 可以显示文档。
+
+### 词法边界：源码编码、字符串前缀和软关键字
+
+源码文件默认 UTF-8，与 `open()` 读取另一个数据文件时采用什么编码是两件事。标识符大小写敏感，可包含允许的 Unicode 字符；项目公共名称仍宜保持一致、避免视觉近似字符。`match`、`case`、`type` 等在指定语法位置才是软关键字，不必像 `if` 一样在所有地方禁止作为名称。
+
+<!-- verify: run -->
+```python
+import keyword
+assert keyword.iskeyword('class')
+assert keyword.issoftkeyword('match')
+assert 'ab' 'cd' == 'abcd'      # 相邻字面量拼接
+assert r'\n' == '\\n'           # 原始字符串保留反斜杠
+assert len('\n') == 1
+assert len(r'\n') == 2
+assert b'A'[0] == 65
+```
+
+`r` 改变字面量反斜杠处理，`b` 创建 bytes，`f` 执行插值并生成 str；组合前缀也必须符合语法。原始字符串不能以奇数个反斜杠结束；f-string 的表达式仍是 Python 表达式。3.14 的 `t` 模板字符串产生 Template 对象，保留插值信息，不是自动安全转义的 str，详见原有 18.9 节。缩进错误、未闭合字符串在解析阶段就失败，不能靠同一个尚未解析成功的源码块内部 try 修复。
 
 ## 1.6 赋值、解包与删除名称
 
@@ -439,6 +466,27 @@ assert isinstance(True, int)  # bool 是 int 的子类
 
 `isinstance` 考虑继承关系；`type(x) is T` 只接受精确类型。外部输入要不要接受 `bool` 作为整数，需要显式决定。
 
+### 赋值、传参、删除：始终追踪对象关系
+
+`a = b` 使两个名称引用同一个对象；函数参数也绑定到传入对象。函数内部重新绑定参数，不会替换调用者的名称；修改共享对象会被调用者看见。“传值还是传引用”容易把不同语言的术语混在一起，这里直接区分重新绑定与原地修改。
+
+<!-- verify: run -->
+```python
+def change(values):
+    values.append(2)
+    values = [99]
+    return values
+
+original = [1]
+returned = change(original)
+assert original == [1, 2] and returned == [99]
+alias = original
+del original
+assert alias == [1, 2]
+```
+
+`del name` 删除名称绑定，`del items[i]` 则请求容器删除元素；二者都不是直接调用对象析构函数。对象仍被其他名称、容器、闭包或缓存引用时，删除一个名称不会令它消失。`id()` 只在对象存活期间区分身份，不适合持久化 ID；两个先后创建且互不存活的对象可能复用标识。
+
 ## 2.2 可变对象、不可变对象与增强赋值
 
 整数、浮点数、字符串、元组不可变；列表、字典、集合、bytearray 可变。不可变容器仍然可以引用可变对象。
@@ -495,6 +543,23 @@ assert pow(2, 10, 1000) == 24  # 模幂，避免先构造完整大整数
 ```
 
 把整数编码成固定字节时，明确长度、大小端与有无符号：`(255).to_bytes(2, "big") == b"\x00\xff"`。
+
+### 除法、余数和布尔值：跨语言迁移的三个反例
+
+<!-- verify: run -->
+```python
+assert 7 / 2 == 3.5
+assert -7 // 2 == -4      # 向负无穷取整，不是向零截断
+assert -7 % 2 == 1
+assert 7 % -2 == -1
+for a, b in [(-7, 2), (7, -2), (-7, -2)]:
+    assert a == (a // b) * b + a % b
+assert int(-3.5) == -3
+assert True + True == 2
+assert {True: 'first', 1: 'second'} == {True: 'second'}
+```
+
+非零整数余数与除数同号。`bool` 是 `int` 子类，数值相等的键会合并；这会影响集合去重和字典键。字段要求“整数且不能是布尔值”时使用 `type(value) is int` 或显式排除 bool。`~`、`&`、`|` 是位运算，`not`、`and`、`or` 是逻辑运算；不能凭符号类似互换。
 
 ## 2.4 float、Decimal、Fraction、complex
 
@@ -555,6 +620,25 @@ for raw in ["NaN", "Infinity", "-1", "bad", "1000001"]:
 ```
 
 本例允许 Decimal 能解析的数字文本，包括科学计数法；若接口只允许固定小数形式，应增加词法约束。这里采取输入即舍入的策略，实际计费可能要求先累计再舍入，两者结果不一定相同。
+
+### NaN、无穷、近零容差与字面值转换
+
+<!-- verify: run -->
+```python
+from decimal import Decimal
+from fractions import Fraction
+import math
+nan = float('nan')
+assert nan != nan
+assert not (nan < 1) and not (nan >= 1)
+assert math.isnan(nan) and not math.isfinite(nan)
+assert not math.isclose(1e-12, 0.0)
+assert math.isclose(1e-12, 0.0, abs_tol=1e-9)
+assert Decimal(0.1) != Decimal('0.1')
+assert Fraction(0.1) != Fraction('0.1')
+```
+
+从 float 转 Decimal/Fraction 会保留原二进制浮点值的影响，不能补回已丢失的十进制意图。NaN 不满足通常的相等与排序直觉，排序或聚合前需定义处理策略；容器查找还可能使用身份快速路径，不要用 `nan in values` 代替逐项 isnan。对外部数值先验证有限性、范围和单位，再参与运算，比事后格式化显示位数可靠。
 
 ## 2.5 字符串、Unicode 与编码
 
@@ -764,6 +848,28 @@ assert values == [0, 8, 9, 10, 3, 4, 5]
 
 切片左闭右开；索引越界抛 `IndexError`，切片边界通常会被截取到有效范围。负步长需理解默认边界；`a[::-1]` 与 `a[len(a)-1:-1:-1]` 并不等价。嵌套元素仍然共享，因为切片是浅拷贝。
 
+### 切片边界会截断，扩展切片赋值要求长度匹配
+
+<!-- verify: run -->
+```python
+values = [0, 1, 2, 3, 4]
+assert values[-99:99] == values
+assert values[::-1] == [4, 3, 2, 1, 0]
+values[1:3] = [9]
+assert values == [0, 9, 3, 4]
+values[::2] = [7, 8]
+assert values == [7, 9, 8, 4]
+try:
+    values[::2] = [1]
+except ValueError:
+    pass
+else:
+    raise AssertionError('非单位步长切片不能随意改变所选槽位数量')
+assert slice(None, None, -1).indices(4) == (3, -1, -1)
+```
+
+单索引越界抛 IndexError；切片通常把边界截到合法范围，步长 0 则非法。普通 list 切片产生新外层列表，但内层元素仍共享；切片赋值修改原列表，普通步长可改变长度，非单位步长要求替换项数相同。切片省略终点与显式 `-1` 在反向遍历时含义不同，不要用一套正向边界直觉硬推反向结果。
+
 ## 3.4 二维列表与重复引用
 
 <!-- verify: run -->
@@ -880,6 +986,37 @@ assert list(data) == ["second", "first"]
 
 `d.setdefault(k, expensive())` 不是惰性工厂；函数调用前参数表达式已经执行。按需创建集合使用 `defaultdict(list)`，或者显式检查缺失再构造。并发读改写还需要锁，单个字典方法的实现细节不能保护多个步骤之间的不变量。
 
+### 默认值是否共享、是否提前执行、是否真的插入
+
+<!-- verify: run -->
+```python
+from collections import defaultdict
+from types import MappingProxyType
+
+calls = []
+def make_default():
+    calls.append('made')
+    return []
+
+data = {'a': [1]}
+assert data.get('a', make_default()) == [1]
+assert calls == ['made']             # 先求实参，再调用 get
+data.setdefault('a', make_default())
+assert len(calls) == 2               # 已有键也先求默认表达式
+groups = defaultdict(list)
+assert groups.get('x') is None and 'x' not in groups
+groups['x'].append(1)                # [] 查找缺失才调用工厂并插入
+assert groups['x'] == [1]
+shared = dict.fromkeys(['a', 'b'], [])
+shared['a'].append(3)
+assert shared['b'] == [3]
+view = MappingProxyType(data)
+data['b'] = [2]
+assert view['b'] == [2]              # 只读视图不是冻结快照
+```
+
+`get` 不插入，`setdefault` 可插入，`defaultdict` 的下标读取可能插入。要避免昂贵默认计算，可先捕获 `KeyError` 再构造，涉及并发时另外同步。`keys/items/values` 反映底层字典变化；遍历时增删键可能报错，应遍历 `list(data)` 等快照后再修改。快照中的嵌套值仍可能共享。
+
 ## 3.7 set 与 frozenset
 
 <!-- verify: run -->
@@ -956,6 +1093,20 @@ assert rows[2]["name"] == "changed"  # 元素对象仍共享
 
 验收：既能说明排序输出，又能说明源列表哪些状态没改、哪些状态仍可能共享；能为保序去重、FIFO、分组和查询分别选容器。
 
+### 排序的返回值、稳定性与比较能力
+
+<!-- verify: run -->
+```python
+rows = [('b', 2), ('a', 2), ('c', 1)]
+assert sorted(rows, key=lambda row: row[1]) == [('c', 1), ('b', 2), ('a', 2)]
+copy = rows[:]
+assert copy.sort(key=lambda row: row[1]) is None
+assert rows[0] == ('b', 2)
+assert sorted([None, 3, 1], key=lambda x: (x is None, x or 0)) == [1, 3, None]
+```
+
+这里稳定性指 key 相同的元素保持输入相对顺序，不意味着原容器不变。`sorted` 返回新列表，`list.sort` 原地修改并返回 None；`append`、`extend` 等也不要赋回列表变量。混合 `str`、`int`、None 通常没有可用的全序，应先规范化类型或提供明确 key。集合比较 `<` 表示真子集，不是字典序大小；不要把任何支持 `<` 的对象都当成有全序。
+
 ## 3.10 常见容器操作组合
 
 <!-- verify: run -->
@@ -1030,6 +1181,26 @@ else:
 
 Python 的 `if`、`for` 块不创建普通局部变量作用域，循环结束后目标名称通常仍存在；推导式的循环目标则有隔离规则。不要把 Go 的块作用域直觉直接迁移过来。函数局部变量与 `global` / `nonlocal` 见 5.6。
 
+### 真值、缺失和比较链必须分开判断
+
+<!-- verify: run -->
+```python
+assert (0 or 10) == 10
+assert ([] and 'unused') == []
+value = 0
+assert (10 if value is None else value) == 0
+assert bool('False') is True
+calls = []
+def middle():
+    calls.append('called')
+    return 2
+assert 1 < middle() < 3
+assert calls == ['called']
+assert (1 in [1] == [1]) is True
+```
+
+`and/or` 短路并返回操作数，不强制返回 bool；`x or default` 会替换 0、空字符串和空容器，而不只替换 None。环境变量文本 `"False"` 非空，不能用 `bool()` 解析开关。链式比较共享中间表达式，`1 in [1] == [1]` 表示两个比较的合取，不是先得到 True 再与列表比较。优先级不清楚时加括号，尤其是 `not`、位运算、比较、海象表达式混用时。
+
 ## 4.2 for 迭代对象
 
 <!-- verify: run -->
@@ -1085,6 +1256,16 @@ assert not contains_negative([1, 2])
 ```
 
 循环正常耗尽或 while 条件变假会进入 else；执行 break、return 或异常中断就不进入。读者不熟悉时可改为 `any(v < 0 for v in values)`，选择更易懂的表达。
+
+### 三种 else 的触发条件
+
+| 结构 | else 什么时候执行 | 不应理解成 |
+|---|---|---|
+| if / else | if 条件为假 | 任何异常后的备用处理 |
+| for / while / else | 循环正常结束，没有用 break 跳出 | 循环一次都没运行才执行 |
+| try / except / else | try 正常走到末尾 | finally 的同义写法 |
+
+空 iterable 的 for 也会正常执行 else；continue 不取消最终 else，return 和传播出的异常会直接离开该控制流。嵌套循环的 break 只影响最近一层循环。if、for、while 和 with 通常不创建新的函数式局部作用域，语句块结束后名称可能仍然存在；但可能因为分支没执行而从未绑定，不能直接假定可读。
 
 ## 4.5 海象表达式 `:=`
 
@@ -1177,6 +1358,30 @@ for raw in [
 本例选择严格拒绝多余字段，版本演进时也可以选择允许并忽略未知字段，但必须明确。模式复杂到需要很多守卫时，应拆成小解析函数；match 的价值是清晰表达有限协议，不是替代一切 if。
 
 验收：空循环也可能执行 else；`break` 只影响最近循环；模式捕获名称与常量比较不同；类型和范围校验应在业务入口显式执行。
+
+### match 中裸名称是捕获，不是已有变量常量
+
+<!-- verify: run -->
+```python
+from enum import Enum
+class Kind(Enum):
+    TEXT = 'text'
+
+def classify(value):
+    match value:
+        case {'kind': Kind.TEXT, 'body': str(body)}:
+            return body
+        case [first, *rest] if rest:
+            return first, rest
+        case _:
+            return None
+
+assert classify({'kind': Kind.TEXT, 'body': 'hi', 'extra': 1}) == 'hi'
+assert classify([1, 2, 3]) == (1, [2, 3])
+assert classify('abc') is None
+```
+
+值模式用 `Kind.TEXT` 这类带点名称；`case TEXT:` 会绑定名称，不能表达“等于外部 TEXT”。映射模式默认允许多余键；字符串和 bytes 不按普通序列模式拆开。类模式检查类型和属性，不调用构造器；位置模式通过 `__match_args__` 解释。守卫在模式成功绑定后执行，所以不要依赖失败分支完全没有副作用，也不要依赖失败模式留下哪些变量。需要严格输入校验时仍应检查未知字段、类型与范围。
 
 ## 4.8 as 模式与星号捕获
 
@@ -1272,6 +1477,25 @@ assert add(2) == [2]
 ```
 
 不要写 `bucket = bucket or []` 替代 None 检查，因为调用者传入的空列表也会被换掉。需要区分“没传”和“明确传 None”时使用私有哨兵对象。
+
+### 用哨兵区分“未提供”和“显式传入 None”
+
+<!-- verify: run -->
+```python
+MISSING = object()
+def update(value=MISSING):
+    if value is MISSING:
+        return '保持原值'
+    if value is None:
+        return '清空'
+    return value
+
+assert update() == '保持原值'
+assert update(None) == '清空'
+assert update(0) == 0
+```
+
+默认参数表达式在执行 `def` 时求值，不是在每次调用时求值；时间戳、随机值和函数调用同样受这个规则影响。哨兵用身份判断，避免触发用户自定义相等方法；这个普通 object 哨兵只用于当前进程的调用协议，不要假定序列化后仍保持身份。
 
 ## 5.4 `/`、`*`、`*args`、`**kwargs`
 
@@ -1402,6 +1626,39 @@ assert (a(), a(), b()) == (1, 2, 1)
 
 闭包捕获绑定而非自动复制对象。`lambda value=value: ...` 固定的是当时对象的引用，如果该对象本身可变，后续修改仍会被观察到。工厂函数能创建独立绑定，但同样不会替你深拷贝输入。
 
+### LEGB 的适用边界：局部判定、类体和推导式
+
+<!-- verify: run -->
+```python
+count = 10
+def broken():
+    count += 1
+try:
+    broken()
+except UnboundLocalError:
+    pass
+else:
+    raise AssertionError('赋值使 count 在整个函数块中被判为局部名称')
+
+label = 'module'
+class Demo:
+    label = 'class'
+    def read(self):
+        return label, self.label
+
+assert Demo().read() == ('module', 'class')
+i = 'outside'
+assert [i * 2 for i in range(3)] == [0, 2, 4]
+assert i == 'outside'
+for i in range(2):
+    pass
+assert i == 1
+```
+
+函数块中存在名称赋值，通常足以让编译器把它判为局部名称，不要求那条分支真的运行。`global` 指当前模块命名空间，不是全程序统一全局；`nonlocal` 重新绑定最近的外层函数已有名称，不能凭空创建外层变量。
+
+普通方法的裸名称查找不把类字典当作闭包环境，读类属性应写 `self.attr` 或 `type(self).attr`。普通列表推导式中的循环目标不泄漏到外层，普通 for 会；推导式内 `:=` 的绑定又有专门规则，不能从前一条类推。3.12+ 类型参数和类型别名、3.14 注解使用注解作用域，允许的名称访问与普通函数体不同，见第 10.10 节。[官方执行模型](https://docs.python.org/3.14/reference/executionmodel.html)
+
 ## 5.7 闭包晚绑定
 
 <!-- verify: run -->
@@ -1528,6 +1785,36 @@ assert work.__name__ == "work"
 这里的 Exception 不会捕获 asyncio.CancelledError；取消仍经过 finally 清理并向外传播。不能把取消当普通可重试业务错误。装饰器保持元数据与保持静态类型签名是两件事，后者见第 10 章 ParamSpec。
 
 多个装饰器 `@outer`、`@inner` 自上而下写，相当于 `outer(inner(fn))`。装饰动作发生在定义阶段；调用时先进入 outer wrapper，再进入 inner wrapper，返回时反向退出。缓存包住权限检查，还是权限检查包住缓存，会改变每次调用是否执行鉴权。
+
+### 四个时刻：装饰器表达式、应用装饰器、调用包装器、执行原函数
+
+<!-- verify: run -->
+```python
+from functools import wraps
+events = []
+def decorate(name):
+    events.append('evaluate ' + name)
+    def apply(fn):
+        events.append('apply ' + name)
+        @wraps(fn)
+        def wrapper():
+            events.append('call ' + name)
+            return fn()
+        return wrapper
+    return apply
+
+@decorate('outer')
+@decorate('inner')
+def work():
+    events.append('body')
+
+assert events == ['evaluate outer', 'evaluate inner', 'apply inner', 'apply outer']
+work()
+assert events[-3:] == ['call outer', 'call inner', 'body']
+assert work.__wrapped__.__wrapped__.__name__ == 'work'
+```
+
+装饰器表达式从上到下求值，应用从内到外；调用时先进入最外层包装器。`wraps` 复制常用元数据并设置 `__wrapped__`，不自动修复错误的参数转发、异步等待、生成器迭代或异常处理。包装器只返回一个生成器对象时，函数体后续执行的异常不会被包在“创建生成器”的 try 中。
 
 ## 5.11 缓存与 singledispatch
 
@@ -1690,6 +1977,28 @@ assert sum(n * n for n in range(4)) == 14
 
 圆括号表达式通常创建生成器，方括号创建列表。生成器表达式最外层可迭代部分在创建时求值，元素计算通常发生在消费时；如果闭包依赖后来改变的状态，要留意执行时机。
 
+### 生成器表达式只有部分工作延迟
+
+<!-- verify: run -->
+```python
+events = []
+def source():
+    events.append('source')
+    return [1, 2]
+def transform(n):
+    events.append(n)
+    return n * 10
+
+stream = (transform(n) for n in source())
+assert events == ['source']
+assert next(stream) == 10
+assert events == ['source', 1]
+assert list(stream) == [20]
+assert list(stream) == []
+```
+
+最左侧 for 的可迭代表达式及迭代器建立发生在创建生成器表达式时，其余处理在消费时推进。“惰性”不等于整行没有任何立即执行的部分。生成器函数调用则先返回生成器，函数体要等推进才开始；列表推导式立即构造列表。这三者必须分别判断。
+
 ## 6.5 yield from、return 与 StopIteration.value
 
 <!-- verify: run -->
@@ -1728,6 +2037,32 @@ g.close()
 ```
 
 `send(value)` 把值作为上次 yield 表达式的结果；未启动的生成器只能先 send(None) 或 next。`throw` 在暂停点注入异常；`close` 请求结束。实际异步业务优先用 async / await，不要用手写 send 协议代替 asyncio。
+
+### send 交付给哪个 yield，return 交付给谁
+
+<!-- verify: run -->
+```python
+def accumulator():
+    total = 0
+    while True:
+        value = yield total
+        if value is None:
+            return total
+        total += value
+
+stream = accumulator()
+assert next(stream) == 0
+assert stream.send(4) == 4
+assert stream.send(5) == 9
+try:
+    stream.send(None)
+except StopIteration as stop:
+    assert stop.value == 9
+else:
+    raise AssertionError('应已结束')
+```
+
+第一次先 `next(g)` 或 `g.send(None)`，让它暂停在 yield；之后 send 的值成为该 yield 表达式的结果，再运行到下一次 yield。`throw` 在暂停点注入异常；`close` 请求以 GeneratorExit 结束，清理时不能继续 yield 普通值。生成器内部用 `return` 结束，手动抛出逃逸的 StopIteration 会被转换成 RuntimeError。`yield from` 不仅转发元素，还代理 send/throw/close 等协议并接收子生成器 return 值；普通 `for/yield` 不完整等价。
 
 ## 6.7 itertools 的惰性组合
 
@@ -1778,6 +2113,25 @@ assert mean_once([2, 4, 6]) == 4
 ```
 
 `tee` 让多个消费者看到相同输入，但慢消费者会使缓存累积；它没有消除“保存还未消费数据”的成本。`groupby` 的子迭代器与主迭代器共享游标，必须先消费当前组，或物化当前组后再前进。
+
+### groupby 的组和 tee 的分支仍受原迭代器约束
+
+<!-- verify: run -->
+```python
+from itertools import groupby, tee, islice
+groups = groupby('AABBA')
+key, first = next(groups)
+assert key == 'A' and next(first) == 'A'
+key, second = next(groups)
+assert key == 'B' and list(first) == []
+assert list(second) == ['B', 'B']
+left, right = tee(iter([1, 2, 3]))
+assert list(islice(left, 2)) == [1, 2]
+assert list(right) == [1, 2, 3]
+assert list(left) == [3]
+```
+
+`groupby` 的组共享底层输入，外层推进后旧组可能不能再读，需保存时及时转成 list。`tee` 通过缓存照顾较慢分支，不是免费复制数据源；分支进度差很大时缓存也很大。`islice` 会消费输入，`takewhile` 会消耗第一个不满足条件的元素。设计流水线时把“谁已经读走了数据”与“内存里还留着什么”一起分析。[itertools 参考](https://docs.python.org/3.14/library/itertools.html)
 
 ## 6.9 流水线示例
 
@@ -1994,6 +2348,40 @@ assert module.loads('{"ok": true}') == {"ok": True}
 
 循环导入常见于 A 顶层导入 B，B 又读取尚未初始化完成的 A。优先提取共享模型、降低模块耦合；只在确有必要时采用函数内延迟导入。不要用 reload 作为生产依赖管理机制。
 
+### 真实文件实验：导入缓存与模块入口
+
+<!-- verify: run -->
+```python
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import subprocess, sys
+
+with TemporaryDirectory() as directory:
+    root = Path(directory)
+    package = root / 'lesson_package'
+    package.mkdir()
+    (package / '__init__.py').write_text("print('init')\n", encoding='utf-8')
+    (package / 'value.py').write_text('answer = 42\n', encoding='utf-8')
+    (package / '__main__.py').write_text(
+        "from .value import answer\nprint(answer)\n", encoding='utf-8',
+    )
+    # 子进程有意不使用 -I，让临时 cwd 中的练习包可被导入。
+    imported = subprocess.run(
+        [sys.executable, '-B', '-c', 'import lesson_package; import lesson_package'],
+        cwd=root, capture_output=True, text=True, encoding='utf-8',
+        check=True, timeout=5,
+    )
+    launched = subprocess.run(
+        [sys.executable, '-B', '-m', 'lesson_package'],
+        cwd=root, capture_output=True, text=True, encoding='utf-8',
+        check=True, timeout=5,
+    )
+    assert imported.stdout.splitlines() == ['init']
+    assert launched.stdout.splitlines() == ['init', '42']
+```
+
+同一解释器重复 import 通常只初始化一次；另一个子进程有独立模块缓存，会重新初始化。`-m package` 执行包入口且保留相对导入上下文。这个实验验证模块执行，不代表已验证 wheel 的构建、安装和包数据分发。
+
 ## 7.4 sys.path、同名遮蔽与缓存
 
 <!-- verify: run -->
@@ -2004,6 +2392,31 @@ print(json.__file__)
 ```
 
 不要给业务文件起名 `json.py`、`typing.py`、`requests.py`，它们可能遮蔽标准库或依赖。遇到 `partially initialized module`，先检查文件名、导入链和启动目录。`__pycache__` 是字节码缓存；删缓存不能修复真实导入循环或缺失源码。
+
+### 启动方式、当前目录和导入位置是三件事
+
+| 情况 | 应先检查 | 常见误判 |
+|---|---|---|
+| `python path/to/tool.py` | 脚本目录通常进入搜索路径；模块名是 `__main__` | 认为当前工作目录自动变成脚本目录 |
+| `python -m package.module` | 包必须可导入，按模块上下文执行入口 | 把它当作文件路径命令 |
+| 交互式或 `-c` | 当前目录通常参与模块搜索 | 只在仓库根目录测试就认定安装成功 |
+| `python -I` | 隔离模式排除部分路径和环境影响 | 认为隔离模式限制了文件系统权限 |
+
+`open('config.toml')` 按当前工作目录解释，不按源码目录解释。包随附资源用 `importlib.resources`；用户输入文件路径由 CLI 明确解释。导入问题先打印解释器、模块来源、包上下文，再考虑修改路径：
+
+<!-- verify: run -->
+```python
+import sys
+import json
+import importlib.util
+assert sys.executable
+spec = importlib.util.find_spec('json')
+assert spec is not None and spec.origin == json.__file__
+assert json.__package__ == 'json'
+print(sys.executable, json.__file__)
+```
+
+模块对象在顶层代码执行完成之前就进入 `sys.modules`，这让循环导入能看到“部分初始化”的模块。`reload` 重新执行模块代码，不会替换其他地方保存的旧函数/旧类实例，也不保证清空旧字典。`.pyc` 是解释器相关的缓存，不是通用独立可执行文件。[导入系统参考](https://docs.python.org/3.14/reference/import.html)
 
 ## 7.5 pip、发行包与导入包名
 
@@ -2101,6 +2514,20 @@ except PackageNotFoundError:
 读取包内数据优先用 `importlib.resources`，不要假定运行时 cwd 就是源码目录。环境变量全是文本，也需要解析、范围校验、默认值策略；机密不写入仓库。
 
 延伸：[官方模块教程](https://docs.python.org/3.14/tutorial/modules.html)、[PyPA 打包指南](https://packaging.python.org/en/latest/tutorials/packaging-projects/)。
+
+### 工程基础的最小责任划分
+
+| 对象 | 负责什么 | 不负责什么 |
+|---|---|---|
+| Python 解释器 | 执行语法与对象协议 | 自动安装项目依赖 |
+| venv | 隔离一组安装位置和入口 | 隔离操作系统、网络与任意文件访问 |
+| 模块 / 导入包 | 组织运行时名称与代码 | 与安装发行包名一一对应 |
+| 发行包元数据 | 声明版本、依赖、入口 | 保证源目录测试覆盖安装后行为 |
+| CLI 入口 | 读取参数、配置输出与退出码 | 导入时就执行整套程序 |
+
+激活 venv 主要调整命令解析；直接调用 `.venv/Scripts/python.exe` 也能使用环境。`sys.prefix != sys.base_prefix` 可识别常规 venv，别只看提示符。库模块在 import 时定义函数和类，入口在调用时加载配置、分配资源、执行工作。可复用函数返回结果或抛异常，由 CLI 决定 stdout、stderr 和退出码；不要在深层工具函数中随意 `sys.exit()`。
+
+包数据不保证对应一个长期存在的普通路径。`importlib.resources.files(package)` 返回资源访问对象；外部 API 必须要真实路径时，用 `as_file()` 的上下文，并在上下文内消费路径。不要把资源临时路径保存到退出上下文后的全局变量。
 
 
 ---
@@ -2217,6 +2644,33 @@ assert User.valid_name("A")
 
 classmethod 接收实际调用类，适合替代构造器并支持继承；staticmethod 不接收隐式实例 / 类，适合逻辑上相关的纯函数。但很多静态方法直接做成模块函数就足够。
 
+### 为什么赋给实例的函数不会自动得到 self
+
+<!-- verify: run -->
+```python
+from types import MethodType
+class Item:
+    def name(self):
+        return type(self).__name__
+    @classmethod
+    def make(cls):
+        return cls()
+
+class Child(Item):
+    pass
+
+obj = Item()
+assert obj.name.__self__ is obj
+assert obj.name.__func__ is Item.name
+obj.plain = lambda: 'plain'
+assert obj.plain() == 'plain'
+obj.bound = MethodType(lambda self: self.name(), obj)
+assert obj.bound() == 'Item'
+assert type(Child.make()) is Child
+```
+
+类字典中的函数经描述符协议绑定，实例字典中的普通函数直接取出，不会自动插入 self。classmethod 绑定实际调用类，所以替代构造器写 `cls(...)` 才能保留子类；写死 `Item(...)` 就失去这个性质。staticmethod 不参与实例或类的隐式传参。
+
 ## 8.6 继承、重写与 super
 
 <!-- verify: run -->
@@ -2331,6 +2785,33 @@ else:
 
 dataclass 默认相等比较关注同类字段值，适合值对象；数据库实体可能按身份或业务主键定义相等性，不应不加判断地使用所有字段比较。`repr` 自动包含字段，密码或令牌字段应使用 `field(repr=False)`，并另外检查日志和序列化输出。
 
+### dataclass 的字段、构造参数和相等规则
+
+<!-- verify: run -->
+```python
+from dataclasses import dataclass, field, InitVar, fields
+from typing import ClassVar
+
+@dataclass(kw_only=True)
+class Record:
+    category: ClassVar[str] = 'record'
+    raw: InitVar[str]
+    name: str = field(init=False)
+    trace: str = field(default='', compare=False, repr=False)
+    def __post_init__(self, raw):
+        self.name = raw.strip()
+
+a = Record(raw=' a ', trace='one')
+b = Record(raw='a', trace='two')
+assert a == b
+assert [f.name for f in fields(Record)] == ['name', 'trace']
+assert 'trace=' not in repr(a)
+```
+
+ClassVar 不作为实例字段；InitVar 只送入初始化流程，生成器不会把它存成实例字段；`init=False` 字段需自行建立。`compare=False` 明确排除非身份信息。生成的 `__init__` 不会自动调用普通基类的 `__init__`，需要时在 `__post_init__` 显式协调。
+
+默认 `eq=True, frozen=False` 的 dataclass 通常不可哈希；`eq=True, frozen=True` 通常生成 hash，但字段仍须可哈希。`unsafe_hash=True` 不能让可变键安全。位置字段中无默认值项不能跟在有默认值项后面，继承字段也会影响顺序；`kw_only` 可减少演进时的位置参数歧义。[dataclasses 参考](https://docs.python.org/3.14/library/dataclasses.html)
+
 ## 8.9 frozen、slots、NamedTuple 与 Enum
 
 <!-- verify: run -->
@@ -2396,6 +2877,34 @@ else:
 
 验收：能解释一个类型为何需要类、字段是否可变、调用方是否能持有内部列表，以及相等性如何定义。不要因为 Go 常用 struct，就把任何 Python 字典都强制包装成类。
 
+### Enum 成员、名称、值、别名与 Flag
+
+<!-- verify: run -->
+```python
+from enum import Enum, IntEnum, Flag, auto, unique
+class State(Enum):
+    READY = 'ready'
+    ALIAS = 'ready'
+assert State('ready') is State.READY
+assert State['READY'] is State.READY
+assert State.ALIAS is State.READY
+assert list(State) == [State.READY]
+assert State.READY != 'ready'
+
+@unique
+class Code(IntEnum):
+    OK = 1
+assert Code.OK == 1
+
+class Permission(Flag):
+    READ = auto()
+    WRITE = auto()
+both = Permission.READ | Permission.WRITE
+assert Permission.READ in both
+```
+
+普通 Enum 把成员与外部标量区分；IntEnum 和 StrEnum 为兼容整数/字符串接口而允许更多跨类型行为。重复值默认形成别名，禁止时加 `unique`。Flag 表达可组合位标志，不适合互斥状态。外部值解析用 `State(value)`，按名字查询用 `State[name]`，二者错误分别是 ValueError 和 KeyError。[enum 参考](https://docs.python.org/3.14/library/enum.html)
+
 ## 8.10 多重继承与 Mixin
 
 <!-- verify: run -->
@@ -2419,6 +2928,36 @@ assert [cls.__name__ for cls in D.__mro__] == ["D", "B", "C", "A", "object"]
 super 沿 MRO 找下一个实现，并不固定指“直接父类”。协作多继承要求调用链和参数约定一致；Mixin 尽量小而无状态。业务模型优先组合，不为了复用一两个方法制造菱形继承。
 
 延伸：[官方类教程](https://docs.python.org/3.14/tutorial/classes.html)。
+
+### 协作式 super：每层消费自己的参数并继续传递
+
+<!-- verify: run -->
+```python
+class Root:
+    def __init__(self, **kwargs):
+        if kwargs:
+            raise TypeError(f'未知参数: {sorted(kwargs)}')
+        super().__init__()
+
+class Named(Root):
+    def __init__(self, *, name, **kwargs):
+        self.name = name
+        super().__init__(**kwargs)
+
+class Tagged(Root):
+    def __init__(self, *, tag, **kwargs):
+        self.tag = tag
+        super().__init__(**kwargs)
+
+class Item(Named, Tagged):
+    pass
+
+obj = Item(name='book', tag='python')
+assert (obj.name, obj.tag) == ('book', 'python')
+assert Item.__mro__ == (Item, Named, Tagged, Root, object)
+```
+
+MRO 使用 C3 线性化，同时保持局部基类顺序和继承关系；矛盾的顺序会在建类时抛 TypeError，不会任意选一条。这里 Named 中的 super 对 Item 实例继续到 Tagged。每一层必须恰好合作调用下一层，并约定参数转发；夹杂 `Root.__init__(self)` 之类固定父类调用可能跳过或重复初始化。普通子类若覆盖 `__init__` 也不会自动补调父类初始化。
 
 
 ---
@@ -2480,6 +3019,28 @@ assert UserKey("a", 1) != "a:1"
 
 `NotImplemented` 告诉解释器“这个操作数组合我不支持”，允许尝试反向操作或其他回退。`NotImplementedError` 是异常，表示功能未实现，两者完全不同。
 
+### NotImplemented 不等于 False：给另一侧一次协商机会
+
+<!-- verify: run -->
+```python
+class Left:
+    def __add__(self, other):
+        return NotImplemented
+    def __eq__(self, other):
+        return NotImplemented
+class Right:
+    def __radd__(self, other):
+        return 'right handled'
+
+left = Left()
+assert left + Right() == 'right handled'
+assert (left == object()) is False
+assert left == left
+assert Left.__hash__ is None
+```
+
+两侧都不支持算术或排序时通常抛 TypeError；相等比较协商失败时可退回身份比较。提前返回 False 就是声称“已经比较，确实不等”，可能阻止另一侧实现发挥作用。右侧是更具体的子类时还有反射方法优先规则，不能把所有二元运算都简化成单次左侧方法调用。Python 3.14 起对 NotImplemented 取 bool 会报 TypeError。
+
 ## 9.3 运算重载与可调用对象
 
 <!-- verify: run -->
@@ -2506,6 +3067,29 @@ assert Multiplier(3)(5) == 15
 ```
 
 相关方法还有 `__radd__`、`__iadd__`、`__lt__`、`__format__`、`__index__`。重载应符合读者对运算的预期，不要用 `+` 暗中触发数据库写入。
+
+### 特殊方法查类型；整数转换和整数索引不是一个协议
+
+<!-- verify: run -->
+```python
+class Container:
+    def __len__(self):
+        return 2
+
+obj = Container()
+obj.__len__ = lambda: 99
+assert obj.__len__() == 99
+assert len(obj) == 2
+
+class Index:
+    def __index__(self):
+        return 2
+
+assert ['a', 'b', 'c'][Index()] == 'c'
+assert list(range(Index())) == [0, 1]
+```
+
+隐式特殊方法查找通常绕过实例字典；不能给实例塞一个 `__call__` 就保证它能被调用。`__int__` 表示可转换成整数，`__index__` 表示具有精确整数身份，可用于切片、range 等。`__getitem__` 要自行处理整数与 slice；`__contains__` 缺失时成员测试可能迭代并消耗输入。自定义协议时除了成功结果，还要保持正确的异常类型。
 
 ## 9.4 属性访问：getattr 与 getattribute
 
@@ -2598,6 +3182,12 @@ assert p.price == 20 and p.stock == 2
 
 实现 `__get__`、`__set__` 或 `__delete__` 的类可参与描述符协议。提供 `__set__` / `__delete__` 的是数据描述符，通常优先于实例字典；只有 `__get__` 的非数据描述符通常可被实例同名属性遮蔽。property、方法绑定都与这套机制相关。
 
+### 描述符对象属于类，字段值通常属于实例
+
+描述符自身一般由全部实例共享，把用户值写到 `self.value` 会造成串值；应通过 instance 的字典或其他按实例隔离的存储保存。描述符必须放在类属性位置才能正常参与普通属性访问；放进实例字典不会自动调用它的 `__get__`。
+
+`__set_name__` 是建类时的命名通知，不是每次赋值的回调；运行时追加描述符须自行调用通知，且复用同一描述符对象到多个字段需要管理多个名称。只读 property 仍是数据描述符，赋值报错；`cached_property` 通常计算后把结果写进实例字典，可覆盖或删除以重新计算，因而要求合适的实例字典，也不等于锁保护的只计算一次。[描述符指南](https://docs.python.org/3.14/howto/descriptor.html)
+
 ## 9.6 类创建、__new__ 与元类
 
 <!-- verify: run -->
@@ -2672,6 +3262,26 @@ assert events[-1] == "instance"
 
 验收：面对“实例字典里有值，但读取返回另一个值”，先查是否有数据描述符；面对“还没创建实例就执行了代码”，先查类体和装饰器。不要从这些现象直接推断 Python 随机执行。
 
+### new 和 init 的职责边界
+
+<!-- verify: run -->
+```python
+events = []
+class Factory:
+    def __new__(cls):
+        events.append('new')
+        return {'ready': True}
+    def __init__(self):
+        events.append('init')
+
+assert Factory() == {'ready': True}
+assert events == ['new']
+```
+
+在通常的 type 调用流程中，`__new__` 若返回非该类实例，后续不会对它调用本类初始化。若返回该类已有实例，初始化可能再次执行，因此仅靠 new 缓存对象不自动获得正确的单例生命周期。
+
+理解元类还要分开“继承关系”和“实例关系”：`isinstance(MyClass, type)` 讨论谁创建类对象，`issubclass(MyClass, Base)` 讨论实例行为继承。类创建通常经历基类解析、元类选择、`__prepare__` 命名空间、类体执行、元类创建、`__set_name__` 和 `__init_subclass__` 等钩子，再应用类装饰器。多数扩展需求在后两种钩子或装饰器层就能解决。
+
 ## 9.7 反射、inspect 与动态执行
 
 <!-- verify: run -->
@@ -2707,6 +3317,36 @@ assert ref() is None
 CPython 常结合引用计数和循环垃圾回收，但这不是所有实现共享的精确销毁时机保证。weakref 不维持对象存活，适合部分缓存与观察者关系。不要依赖 `__del__` 关闭数据库、提交事务或释放锁；显式 with 更确定。`id` 只在对象存活期间标识身份，释放后可能复用。
 
 延伸：[数据模型参考](https://docs.python.org/3/reference/datamodel.html)、[描述符指南](https://docs.python.org/3/howto/descriptor.html)。
+
+### 弱引用不拥有对象，slots 也不等于完全禁止动态行为
+
+<!-- verify: run -->
+```python
+import weakref
+class Slotted:
+    __slots__ = ('name', '__weakref__')
+    def __init__(self, name):
+        self.name = name
+
+obj = Slotted('one')
+ref = weakref.ref(obj)
+held = ref()
+assert held is obj
+try:
+    obj.other = 1
+except AttributeError:
+    pass
+else:
+    raise AssertionError('没有实例字典或相应槽')
+
+class Child(Slotted):
+    pass
+child = Child('two')
+child.other = 1
+assert child.__dict__ == {'other': 1}
+```
+
+取弱引用结果后先保存在局部变量，再判断是否为 None，避免“检查时还活着、再次获取时已经回收”。slots 子类若没继续约束布局，可以重新获得实例字典；要支持弱引用需合适的 `__weakref__` 槽。`weakref.finalize` 的回调也不能偷偷通过绑定方法强引用目标，否则可能延长目标生命周期。垃圾回收负责内存对象可达性，with 负责确定的资源退出，两者不能互相替代。[weakref 参考](https://docs.python.org/3.14/library/weakref.html)
 
 
 ---
@@ -2923,6 +3563,26 @@ assert convert(123) == "123" and convert("123") == 123
 
 TypeGuard 告诉检查器某个布尔函数如何收窄类型；函数实现必须诚实。`cast(T, value)` 只是静态声明，返回原对象，不做转换。overload 是多个静态签名加一个运行时实现，不会按参数类型自动在多份同名业务实现之间分派。
 
+### cast、TypeGuard、TypeIs：声明和证明由不同角色完成
+
+<!-- verify: run -->
+```python
+from typing import cast, TypeIs
+
+raw = '42'
+assert cast(int, raw) is raw
+assert int(raw) == 42
+
+def is_text(value: object) -> TypeIs[str]:  # 3.13+
+    return isinstance(value, str)
+
+assert is_text('x') and not is_text(42)
+```
+
+cast 没有执行检查，`int` 才做转换。TypeGuard 的真分支可声明收窄，通常不能据假分支排除该类型；TypeIs 要求目标类型与输入相容，并提供双分支收窄。两者都信任你写的布尔检查，且检查成功后共享可变对象仍可能被其他代码改变。异步代码中在检查与使用之间 await，尤其要考虑这个间隔。
+
+`@overload` 描述多个静态调用关系，运行时仍只有最终实现；`singledispatch` 才按第一个实参类型做运行时分派，且不会检查 `list[int]` 的每个元素。不要用这两种机制代替参数值校验。
+
 ## 10.8 ParamSpec 保留装饰器签名
 
 <!-- verify: run -->
@@ -2948,6 +3608,20 @@ assert add(2, 3) == 5
 ```
 
 比 `Callable[..., Any]` 更准确地传递参数和返回值关系。更高级的 Concatenate、TypeVarTuple、Self 见 typing 文档，使用前明确它们解决的静态问题。
+
+### 泛型工具解决的关系不同
+
+| 工具 | 表达关系 | 最小场景 |
+|---|---|---|
+| TypeVar / `def f[T]` | 多处类型必须相关 | 输入 T，返回 T |
+| 有约束 TypeVar | 从给定类型集合选一个一致类型 | 两个参数同时为 str 或同时为 bytes |
+| bound | 类型必须满足上界，可保留具体子类型 | 接受某基类的子类并返回同型 |
+| Self | 返回接收者所属类型 | 链式实例方法、支持继承的类构造方法 |
+| ParamSpec | 整组位置/关键字参数关系 | 装饰器原样转发签名 |
+| Concatenate | 在参数组前添加参数 | 注入显式上下文参数 |
+| TypeVarTuple / Unpack | 可变长度类型序列 | 异构元组的前后组合 |
+
+这些是静态表达能力，不是运行时自动检查或按类型生成代码。`type Alias = ...`（3.12+）创建延迟求值的别名对象，与普通 `Alias = SomeClass` 的运行时对象不同；不要把新式别名直接当构造器或任意 isinstance 目标。`@override`（3.12+）、`@final` 帮助检查器约束继承，也不在运行时禁止方法替换。[typing 参考](https://docs.python.org/3.14/library/typing.html)
 
 ## 10.9 方差与常见误区
 
@@ -3020,6 +3694,32 @@ python -m mypy your_package
 本教程的“错误类型调用演示”故意展示运行时与静态差别，不能把全书所有代码块拼成一个 mypy 必须通过的模块。项目中先对公共 API、数据模型、服务边界添加注解，再逐步提高严格度。
 
 延伸：[typing 官方参考](https://docs.python.org/3/library/typing.html)、[Python 3.14 注解变化](https://docs.python.org/3/whatsnew/3.14.html)。
+
+### 3.14 注解延迟求值不等于字符串化，也不等于不执行代码
+
+<!-- verify: run -->
+```python
+# 本例要求 Python 3.14，且没有启用 future annotations。
+from annotationlib import get_annotations, Format
+events = []
+def resolve():
+    events.append('resolved')
+    return int
+
+def convert(value: resolve()) -> int:
+    return int(value)
+
+assert events == []
+assert convert('3') == 3
+assert events == []
+annotations = get_annotations(convert, format=Format.VALUE)
+assert annotations['value'] is int
+assert events == ['resolved']
+```
+
+3.11—3.13 未启用 future 时，函数等处的注解通常在定义阶段求值；future annotations 把注解保存为字符串形式。3.14 默认采用延迟求值机制，访问可能触发名称解析和任意表达式执行；它不是把所有注解简单替换成字符串。函数局部变量注解又不同，不会因写 `x: T` 自动创建 x 的值。
+
+`annotationlib` 的 VALUE、FORWARDREF、STRING 用于不同反射需求；`typing.get_type_hints` 用于更高层解析。即使只想显示注解，也不要把处理不可信对象视为天然安全。类型别名和类型参数还有专门的延迟求值/注解作用域规则，不应仅套普通 LEGB。[annotationlib 参考](https://docs.python.org/3.14/library/annotationlib.html)
 
 
 ---
@@ -3098,6 +3798,31 @@ Go 常把错误放在返回值中显式检查；Python 的异常会沿调用栈�
 
 清理代码如果再失败，会增加新的异常上下文。关键资源操作应考虑如何记录清理失败，同时保留业务失败原因；不能在 finally 里 `return True` 让整个操作看起来成功。
 
+### return 先求值，再运行 finally；except 的目标会被清理
+
+<!-- verify: run -->
+```python
+def build():
+    result = []
+    try:
+        return result
+    finally:
+        result.append('cleanup')
+
+assert build() == ['cleanup']
+error = 'old'
+try:
+    raise ValueError('bad')
+except ValueError as error:
+    message = str(error)
+assert message == 'bad'
+assert 'error' not in globals()
+```
+
+return 保存的是计算得到的对象，finally 修改那个可变对象仍会影响调用者看到的结果。若 finally 重新绑定局部 result，则不替换先前选定的返回对象。finally 再 return/raise 会掩盖原控制流，应避免这样设计。
+
+except 的目标名称在处理结束时被清除，以减少异常、回溯帧与局部变量形成的引用环；同名旧绑定也不会自动恢复。需要保留诊断时提取简短文本或专门字段，长期保存整个异常及 traceback 会保留大量对象。
+
 ## 11.3 自定义异常与异常链
 
 <!-- verify: run -->
@@ -3150,6 +3875,26 @@ assert handled == ["ValueError", "OSError"]
 ```
 
 普通 except 处理一个异常对象，except* 按类型拆分异常组的子异常，可能执行多个处理分支。未处理部分继续传播。同一 try 不能混用普通 except 和 except*。TaskGroup 会用异常组报告多个任务失败。
+
+### except* 按叶子类型处理，未匹配部分继续抛出
+
+<!-- verify: run -->
+```python
+seen = []
+try:
+    try:
+        raise ExceptionGroup('batch', [ValueError('value'), TypeError('type')])
+    except* ValueError as group:
+        seen.append(type(group.exceptions[0]))
+except ExceptionGroup as rest:
+    assert len(rest.exceptions) == 1
+    assert isinstance(rest.exceptions[0], TypeError)
+else:
+    raise AssertionError('未处理的 TypeError 不能丢失')
+assert seen == [ValueError]
+```
+
+异常组可能嵌套，实际程序不要假定 `exceptions` 永远是一层叶子。普通 `except ExceptionGroup` 捕获的是整个组；except* 按匹配拆分子组，不能用 return/break/continue 从其处理块跳出。`ExceptionGroup` 只容纳 Exception 子类，涉及 BaseException 的组需理解 BaseExceptionGroup。取消、中断等退出信号不能一律当作普通任务失败吞掉。
 
 ## 11.6 with 与上下文管理协议
 
@@ -3258,6 +4003,46 @@ ExitStack 适合动态数量资源，并按逆序退出；suppress 只应抑制�
 
 延伸：[官方错误和异常](https://docs.python.org/3.14/tutorial/errors.html)、[contextlib](https://docs.python.org/3.14/library/contextlib.html)。
 
+### 可复用、可重入和异步清理：三个不同问题
+
+同一个管理器能否先后进入是“可复用”；能否在尚未退出时再次嵌套进入是“可重入”。文件关闭后不能再用，RLock 支持同线程重入；`@contextmanager` 每次函数调用生成新的管理器，不应重复进入同一个已经耗尽的生成器管理器。一个对象支持 with 不表示它具备以上全部能力。
+
+<!-- verify: run -->
+```python
+import asyncio
+from contextlib import asynccontextmanager, AsyncExitStack, aclosing
+
+async def main():
+    events = []
+    @asynccontextmanager
+    async def resource(name):
+        events.append('open ' + name)
+        try:
+            yield name
+        finally:
+            events.append('close ' + name)
+
+    async def source():
+        try:
+            yield 1
+            yield 2
+        finally:
+            events.append('source closed')
+
+    async with AsyncExitStack() as stack:
+        await stack.enter_async_context(resource('A'))
+        await stack.enter_async_context(resource('B'))
+        async with aclosing(source()) as stream:
+            async for item in stream:
+                assert item == 1
+                break
+    assert events == ['open A', 'open B', 'source closed', 'close B', 'close A']
+
+asyncio.run(main())
+```
+
+提前 break 不应被理解成任意迭代器的自动 close。aclosing 把异步生成器清理放回当前明确的作用域；AsyncExitStack 按逆序等待退出。生成器式上下文管理器捕获块内异常后若不重新抛出，就可能把异常抑制掉，记录日志后通常应 `raise`。[contextlib 参考](https://docs.python.org/3.14/library/contextlib.html)
+
 
 ---
 
@@ -3316,6 +4101,26 @@ with TemporaryDirectory() as tmp:
 ```
 
 文本模式使用编码和换行转换；明确 encoding 更便于跨平台。大文件逐行 / 分块读取，避免无条件 read()。文本流 tell 的值可能是定位 cookie，不能按任意字节偏移理解。重要数据的持久性还涉及 flush、fsync 和文件系统，不是 close 就能保证掉电不丢。
+
+### 文本流、字节流、当前位置与文件尾
+
+<!-- verify: run -->
+```python
+from io import BytesIO, TextIOWrapper
+raw = BytesIO('甲\r\n乙\n'.encode('utf-8'))
+with TextIOWrapper(raw, encoding='utf-8', newline=None) as text:
+    assert text.read(1) == '甲'
+    position = text.tell()
+    assert text.readline() == '\n'
+    text.seek(position)
+    assert text.read() == '\n乙\n'
+    assert text.read() == ''
+assert raw.closed
+```
+
+文本 read(n) 按字符请求，二进制 read(n) 按字节请求；编码器可能预读底层字节，因此别混用同一文件的文本包装层和原始流位置。文本 EOF 是空字符串，二进制 EOF 是空 bytes，而不是 None。TextIOWrapper 默认关闭时会连同底层流关闭，资源包装涉及所有权传递；需要保留底层流时应明确研究 detach 的约束。
+
+`w` 一打开就截断，后续校验失败不能恢复旧内容；`r+` 不自动截断，写入较短内容可能留下旧尾部。`flush` 主要把 Python 缓冲交给下层，持久化要另看 fsync 和文件系统；`seek`、`flush`、`close` 解决的不是同一个问题。[io 参考](https://docs.python.org/3.14/library/io.html)
 
 ## 12.3 StringIO、BytesIO 与临时文件
 
@@ -3693,6 +4498,21 @@ assert 0 <= remaining <= 5
 
 最后一段只演示预算计算，不在此等待。串联多个 I/O 步骤时应从同一 deadline 计算剩余预算；每一步都重新给 5 秒，总耗时可能远超调用方期望。
 
+### 时区、时间点与耗时分别选择表示
+
+<!-- verify: run -->
+```python
+from datetime import datetime, timezone, timedelta
+local_zone = timezone(timedelta(hours=8))
+local = datetime(2026, 1, 1, 8, tzinfo=local_zone)
+utc = local.astimezone(timezone.utc)
+assert utc.hour == 0 and utc == local
+assert local.replace(tzinfo=timezone.utc).hour == 8
+assert local.replace(tzinfo=timezone.utc) != utc
+```
+
+`astimezone` 保留同一时间点并换表示；`replace(tzinfo=...)` 改标签，不进行时刻转换。naive datetime 没有完整时区语义，不能随手当 UTC。固定 UTC 偏移没有地区历史和夏令时规则；地区时间用 zoneinfo，并考虑运行环境时区数据库是否可用。夏令时回拨时重复本地时间由 fold 区分；比较绝对时间或计算真实经历时长时可先转 UTC。超时预算用 monotonic，性能测量用 perf_counter，不用会被校时改变的墙上时钟。
+
 ## 13.4 re：查找、分组、替换与边界
 
 <!-- verify: run -->
@@ -3803,6 +4623,22 @@ assert result.returncode == 0
 
 优先参数列表而非 shell=True 拼接字符串。check=True 在非零退出码抛 CalledProcessError；timeout 限制等待。大量输出用流式消费，避免 capture_output 无限制占内存。不要把口令放在命令参数中，可能出现在进程列表。
 
+### 子进程不是函数调用：状态、输出和退出需要显式传递
+
+<!-- verify: run -->
+```python
+import subprocess, sys
+result = subprocess.run(
+    [sys.executable, '-I', '-c',
+     "import sys; print('out'); print('err', file=sys.stderr); sys.exit(3)"],
+    capture_output=True, text=True, encoding='utf-8', timeout=5,
+)
+assert result.returncode == 3
+assert result.stdout.strip() == 'out' and result.stderr.strip() == 'err'
+```
+
+退出码非零和 stderr 非空不是同一件事；正常程序也可能向 stderr 写进度。`check=True` 让非零退出变成异常。`Popen.wait()` 配合未消费的 PIPE 可能因管道填满而死锁，有限输出用 communicate；无限输出需要持续消费与容量限制。`Popen.communicate(timeout=...)` 超时不会自动替你杀掉子进程，通常还需终止并再次 communicate 回收；高层 run 的处理不同。子进程对环境变量的修改不会写回父进程。
+
 ## 13.9 random、secrets、uuid、hashlib 与 hmac
 
 <!-- verify: run -->
@@ -3911,6 +4747,20 @@ goroutine 由 Go 运行时调度；asyncio 协程通常在一个事件循环线�
 
 Python 3.13 起有可选自由线程构建，扩展兼容、运行时状态和性能都需实际确认。不要写“Python 永远不能多线程并行”，也不要写“新版本已普遍取消 GIL”。官方说明：[自由线程支持](https://docs.python.org/3/howto/free-threading-python.html)。
 
+### 判断当前构建，区分吞吐、并行和状态正确性
+
+<!-- verify: run -->
+```python
+import sys, sysconfig
+assert sys.implementation.name
+print('implementation:', sys.implementation.name)
+print('free-threaded build:', sysconfig.get_config_var('Py_GIL_DISABLED'))
+if hasattr(sys, '_is_gil_enabled'):
+    print('GIL currently enabled:', sys._is_gil_enabled())
+```
+
+构建支持自由线程与当前运行时关闭 GIL 是两个问题，加载不兼容扩展可能重新启用 GIL。并发是多个任务都取得进展，并行是同一时刻实际执行；阻塞 I/O 线程可提高吞吐，不代表纯 Python CPU 循环多核并行。无 GIL 时共享状态更需要明确同步，内置容器的内部保护也不能把“先查再改”变成业务事务。版本号、CPU 占用和某次计数结果都不足以证明线程安全。[自由线程官方说明](https://docs.python.org/3.14/howto/free-threading-python.html)
+
 ## 14.3 Thread、Lock 与线程安全
 
 <!-- verify: run -->
@@ -3968,6 +4818,41 @@ assert inventory.stock == 0
 
 线程队列的停止哨兵只覆盖正常结束；消费者中途异常后不再消费，生产者可能卡在满队列。实际线程 worker 要捕获并报告错误、通知生产者停止，并对阻塞 put/get 设置可退出策略。不能只在主线程 join 然后希望所有工作自动停止。
 
+### 同步原语如何选择，Condition 为什么必须检查谓词
+
+| 原语 | 表达的状态 | 容易误用之处 |
+|---|---|---|
+| Lock | 一次只有一个持有者进入临界区 | 同线程再次 acquire 可能死锁 |
+| RLock | 同线程可重入的锁 | 每次获取都要对应释放；不解决锁顺序冲突 |
+| Event | 一个可设置/清除的标志 | 多次 set 不会累计成多条消息 |
+| Condition | 锁保护下等待某个状态成立 | notify 不是“条件永久成立”的证明 |
+| Semaphore | 可进入区间的许可数 | 不是每秒请求数限制 |
+| Barrier | 一组参与者到达同一阶段 | 参与者失败需处理超时或 broken 状态 |
+
+<!-- verify: run -->
+```python
+from threading import Condition, Thread
+condition = Condition()
+state = {'ready': False, 'value': None}
+result = []
+
+def consume():
+    with condition:
+        if not condition.wait_for(lambda: state['ready'], timeout=3):
+            return
+        result.append(state['value'])
+
+thread = Thread(target=consume)
+thread.start()
+with condition:
+    state.update(ready=True, value=42)
+    condition.notify_all()
+thread.join(timeout=3)
+assert not thread.is_alive() and result == [42]
+```
+
+Condition.wait 释放相关锁并等待，返回前重新获取；wait_for 用谓词循环避免把一次唤醒当成消费资格。生产者在同一把锁内修改状态并通知，消费者即使晚到也能看到 ready。Thread.start 才启动新线程，直接 run 是普通调用；一个 Thread 只能 start 一次。join 只等线程结束，不会像 Future.result 那样重新抛工作异常。daemon 线程在解释器关闭时可能被突然停止，不能用它保证保存数据。[threading 参考](https://docs.python.org/3.14/library/threading.html)
+
 ## 14.4 Queue：生产者消费者与背压
 
 <!-- verify: run -->
@@ -3998,6 +4883,30 @@ assert result == [2, 4, 6]
 
 有界队列使生产者在积压时等待，是最基本的背压。task_done 必须与每次 get 对应，包括停止哨兵；否则 join 永远等不到。多个消费者需要为每个消费者安排停止条件。
 
+### 队列为空、任务完成和业务成功是三种状态
+
+`get` 把项目拿走后队列可能已空，但 worker 仍在工作；`task_done` 递减未完成计数；`join` 等计数归零，不会判断业务是否成功。异常分支也应结算计数，再通过其他通道报告失败。线程队列的 empty/full/qsize 是瞬时观察，不能用“先判空再 get”代替阻塞/超时或 get_nowait 捕获 Empty。
+
+<!-- verify: run -->
+```python
+# Python 3.13+：有序关闭队列，不需要拿业务值充当哨兵。
+from queue import Queue, ShutDown
+queue = Queue(maxsize=2)
+queue.put(1)
+queue.shutdown()
+assert queue.get() == 1
+queue.task_done()
+queue.join()
+try:
+    queue.get()
+except ShutDown:
+    pass
+else:
+    raise AssertionError('关闭且排空后应终止读取')
+```
+
+正常 shutdown 允许消费已排队数据并拒绝新 put；`immediate=True` 会放弃排队数据，可能让 join 返回却没有完成全部业务，不能把它当正常成功。`asyncio.Queue` 有相应关闭 API（3.13+），但不是线程安全队列；异步 get/put 使用 await，task_done 不用 await。两类队列 maxsize=0 都表示无界。[queue](https://docs.python.org/3.14/library/queue.html)、[asyncio.Queue](https://docs.python.org/3.14/library/asyncio-queue.html)
+
 ## 14.5 线程池、Future 与完成顺序
 
 <!-- verify: run -->
@@ -4015,6 +4924,37 @@ assert sorted(results) == [1, 4, 9]
 ```
 
 map 按输入顺序返回；as_completed 按完成顺序交付。异常通常在 result 或迭代结果时重新抛出。不要在线程池工作函数内等待同一饱和池中新任务的结果，可能死锁。Future.cancel 无法强杀已经运行的线程；超时返回也不代表后台任务停止。
+
+### Future 的等待超时不终止工作；退出线程池还会等待
+
+<!-- verify: run -->
+```python
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from threading import Event
+started, release = Event(), Event()
+def work():
+    started.set()
+    release.wait()
+    return 42
+
+with ThreadPoolExecutor(max_workers=1) as pool:
+    future = pool.submit(work)
+    try:
+        assert started.wait(3)
+        try:
+            future.result(timeout=0)
+        except TimeoutError:
+            pass
+        else:
+            raise AssertionError('工作仍被 Event 阻塞')
+        assert not future.cancel()
+        assert not future.done()
+    finally:
+        release.set()
+    assert future.result(timeout=3) == 42
+```
+
+Future 有待运行、运行中、完成/取消等状态，cancel 主要对尚未开始的工作有效。线程池 with 退出通常等待已提交工作；在 with 内捕获超时，不意味着整个 with 会及时返回。`shutdown(cancel_futures=True)` 可取消尚未启动工作，无法强杀运行线程。`map` 按输入顺序取结果可能被最前面的慢任务拖住；3.14 的 buffersize 可约束尚未交付结果的提交积压，较早版本需自行分批。[concurrent.futures 参考](https://docs.python.org/3.14/library/concurrent.futures.html)
 
 ## 14.6 进程池与 Windows spawn
 
@@ -4046,6 +4986,30 @@ spawn 启动新解释器并重新导入主模块，顶层副作用会重复执�
 
 本书显式选择 spawn，避免依赖平台默认值。Python 3.14 的进程启动默认方式变化应查对应版本的 multiprocessing 文档；不要把“Linux 就一定 fork”写成跨版本约定。自由线程、子解释器和进程池各有对象共享与扩展兼容限制，不能仅看名称判断更快。
 
+### spawn 下用真实子进程证明隔离
+
+下面保存成脚本执行；本项目验证器会把标记块保存成独立文件，所以也可自动运行。
+
+<!-- verify: run -->
+```python
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import get_context
+
+def change(values):
+    values.append(99)
+    return values
+
+if __name__ == '__main__':
+    original = [1]
+    with ProcessPoolExecutor(max_workers=1, mp_context=get_context('spawn')) as pool:
+        assert pool.submit(change, original).result(timeout=8) == [1, 99]
+    assert original == [1]
+```
+
+spawn 使用新解释器，fork 复制父进程当时状态并具有多线程继承风险，forkserver 经独立服务器创建进程。3.14 在支持的平台上 POSIX 默认改为 forkserver；Windows 和 macOS 常用 spawn，fork 不再是任何平台的默认方式。显式 get_context 更易表达要求，不在可复用库里随意改全局启动方式。
+
+普通全局变量不是进程间共享状态；Manager 提供代理访问，有序列化和往返成本；shared_memory 共享字节区，仍需格式、同步和 close/unlink 所有权。进程队列传送的是序列化数据，不要 put 后继续修改同一输入并假定快照时机。父进程应消费通信数据并正确 join，强行 terminate 可能留下锁或损坏通信状态。[multiprocessing 参考](https://docs.python.org/3.14/library/multiprocessing.html)
+
 ## 14.7 async def、await 与 Task
 
 <!-- verify: run -->
@@ -4066,6 +5030,39 @@ asyncio.run(main())
 ```
 
 调用 async 函数得到 coroutine 对象，不会自动启动。await 允许当前任务在适当位置挂起，但不是每个 await 都必然切走。`time.sleep`、同步 HTTP 请求、大型 CPU 循环会阻塞事件循环。
+
+### 协程函数、协程对象、Task 与 Future
+
+| 对象 | 如何得到 | 谁推进 | 结果如何读取 |
+|---|---|---|---|
+| 协程函数 | `async def f` | 只是定义 | 调用得到协程对象 |
+| 原生协程对象 | `f()` | await 或任务调度 | 通常只能驱动完成一次 |
+| asyncio.Task | `create_task(f())` | 所属事件循环 | await，可重复取得已完成结果 |
+| asyncio.Future | 底层异步操作结果占位 | 完成方设置结果/异常 | await，不应随意阻塞读取 |
+| concurrent.futures.Future | 线程/进程池 submit | 执行器 | result 可阻塞；不是同一种 Future |
+
+<!-- verify: run -->
+```python
+import asyncio
+async def value():
+    return 7
+
+async def main():
+    coro = value()
+    assert await coro == 7
+    try:
+        await coro
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('原生协程不能重复驱动')
+    task = asyncio.create_task(value())
+    assert await task == 7 and await task == 7
+
+asyncio.run(main())
+```
+
+连续 `await f(); await g()` 一般串行推进；先创建两个任务再等待才表达并发。默认调度与 eager task factory（3.12+）的立即执行方式不同，不要把 create_task 后首条副作用的固定顺序当作全环境保证。asyncio.Future 未完成时 result() 抛 InvalidStateError，不能拿线程 Future 的阻塞行为套用。跨模型可用 wrap_future、run_in_executor 等桥接，不能直接 await 任意线程池 Future。
 
 ## 14.8 TaskGroup 与结构化并发（3.11+）
 
@@ -4128,6 +5125,17 @@ TaskGroup 的作用域给“这些子任务属于谁”一个明确答案。后�
 
 `gather(return_exceptions=True)` 把异常作为结果元素交给调用者，不意味着错误已经处理；必须逐项检查。批量任务选择“任一失败则整体取消”还是“收集部分成功”，属于业务契约，不能只是为了让程序不抛异常而切换选项。
 
+### gather、wait 与 TaskGroup 的责任边界
+
+| API | 常见用途 | 出错/超时后谁收尾 |
+|---|---|---|
+| TaskGroup | 同一作用域的一组子任务 | 普通子任务失败时取消其余并等待清理，随后报告异常组 |
+| gather | 按输入顺序收集结果 | 默认传播首个异常，其他任务通常仍运行；调用方负责余下生命周期 |
+| wait | 得到 done/pending 两组任务 | 超时返回 pending，不自动取消，需要调用方取消并等待 |
+| as_completed | 优先处理已完成结果 | 提前结束遍历后仍需处理未完成工作 |
+
+TaskGroup 中一个任务自行取消，不等价于普通异常触发的整组失败；KeyboardInterrupt/SystemExit 等有专门传播规则。gather 已经完成异常传播后再 cancel 它，也未必能取消原来的兄弟任务。选择 API 时先定义失败语义，再按文档实现收尾，不要用 `return_exceptions=True` 掩盖缺失的错误处理。
+
 ## 14.9 超时、取消与 finally
 
 <!-- verify: run -->
@@ -4177,6 +5185,38 @@ asyncio.run(main())
 
 Python 的取消和 Go context 有相似目的，但机制不同：context 依赖被调用代码观察 Done 或 deadline；asyncio 通过任务取消异常和挂起点合作。两者都不保证远程系统回滚已经发生的写入。
 
+### shield 保护的是被等待任务，调用者仍会收到取消
+
+<!-- verify: run -->
+```python
+import asyncio
+async def main():
+    ready, release = asyncio.Event(), asyncio.Event()
+    async def inner():
+        await release.wait()
+        return 42
+    task = asyncio.create_task(inner())
+    async def outer():
+        ready.set()
+        return await asyncio.shield(task)
+    waiter = asyncio.create_task(outer())
+    await ready.wait()
+    waiter.cancel()
+    try:
+        await waiter
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError('外层应收到取消')
+    assert not task.done()
+    release.set()
+    assert await task == 42
+
+asyncio.run(main())
+```
+
+这里只演示生命周期差异，显式保留 task 并在结尾等待它。shield 不阻止别人直接取消 task，也不替调用方关闭任务。to_thread 被等待方取消后，实际线程也可能继续做事；必须让阻塞函数自身具备超时或停止协议。取消不是事务回滚，也不保证 finally 中的任意异步清理永远不会再次被取消。[asyncio 任务参考](https://docs.python.org/3.14/library/asyncio-task.html)
+
 ## 14.10 限流、异步迭代与 to_thread
 
 <!-- verify: run -->
@@ -4203,6 +5243,43 @@ asyncio.run(main())
 
 Semaphore 限制进入区间的任务数量，但如果先创建百万个 Task，任务对象仍会占内存。大规模输入采用有界 asyncio.Queue + 固定消费者。to_thread 用于把阻塞 I/O 移出事件循环；常规 GIL 构建中不会让普通 Python CPU 计算神奇并行。
 
+### 单线程 asyncio 也会有竞争；线程锁不能替代异步锁
+
+<!-- verify: run -->
+```python
+import asyncio
+async def main():
+    state = {'total': 0}
+    both_read = asyncio.Event()
+    count = 0
+    async def unsafe():
+        nonlocal count
+        old = state['total']
+        count += 1
+        if count == 2:
+            both_read.set()
+        await both_read.wait()
+        state['total'] = old + 1
+    await asyncio.gather(unsafe(), unsafe())
+    assert state['total'] == 1
+
+    lock = asyncio.Lock()
+    async def safe():
+        async with lock:
+            old = state['total']
+            await asyncio.sleep(0)
+            state['total'] = old + 1
+    state['total'] = 0
+    await asyncio.gather(safe(), safe())
+    assert state['total'] == 2
+
+asyncio.run(main())
+```
+
+竞争发生在读改写之间的 await，让两个任务读到相同旧值。这个 Event 反例有确定执行顺序，不依赖碰运气。asyncio.Lock 只协调事件循环任务，不保护其他线程；threading.Lock 的阻塞获取可能卡住整个循环，RLock 又按线程认主，无法区分同一线程的多个协程。跨线程提交回调用 loop.call_soon_threadsafe；run_coroutine_threadsafe 给外部线程返回可等待结果，别在循环自身线程阻塞等待它。
+
+Semaphore 限制同时进行的数量，速率限制控制单位时间次数，背压约束积压；三者不能互相替代。[asyncio 同步原语](https://docs.python.org/3.14/library/asyncio-sync.html)
+
 ## 14.11 ContextVar 与异步上下文
 
 <!-- verify: run -->
@@ -4226,6 +5303,33 @@ asyncio.run(main())
 ```
 
 threading.local 按线程隔离，不适合在同一线程承载多个异步请求的请求上下文；ContextVar 按上下文传播。它也不是跨进程分布式上下文自动传播机制。
+
+### ContextVar 复制绑定，不深拷贝绑定的对象
+
+<!-- verify: run -->
+```python
+import asyncio
+from contextvars import ContextVar
+request = ContextVar('request', default='unset')
+payload = ContextVar('payload')
+
+async def main():
+    request.set('before')
+    payload.set([])
+    async def child():
+        payload.get().append('shared')
+        return request.get()
+    task = asyncio.create_task(child())
+    request.set('after')
+    assert await task == 'before'
+    assert request.get() == 'after'
+    assert payload.get() == ['shared']
+    assert await asyncio.to_thread(request.get) == 'after'
+
+asyncio.run(main())
+```
+
+Task 默认捕获创建时上下文，父任务后来 set 不会追写既有子任务绑定；绑定里的 list 仍共享。避免 `ContextVar(..., default=[])` 形成全局可变默认值，按请求设置独立值并 finally reset token。to_thread 会传播当前上下文，但在线程中的重新绑定不会自动写回调用方。[contextvars 参考](https://docs.python.org/3.14/library/contextvars.html)
 
 ## 14.12 退出与运维边界
 
@@ -4671,6 +5775,35 @@ else:
 ```
 
 autospec 能检查调用签名，不能证明第三方系统真的接收了消息，也不会按注解检查每个值的类型。异步方法可用 AsyncMock 并断言 awaited 情况；调用过异步函数不等于已 await。
+
+### autospec 检查调用形状，AsyncMock 区分调用和等待
+
+<!-- verify: run -->
+```python
+import asyncio
+from unittest.mock import create_autospec, AsyncMock
+def read(key, *, timeout=1):
+    return key
+fake = create_autospec(read, return_value='value')
+assert fake('k', timeout=2) == 'value'
+try:
+    fake('k', 2)
+except TypeError:
+    pass
+else:
+    raise AssertionError('关键字专用参数不能按位置传入')
+
+async def main():
+    fetch = AsyncMock(return_value=42)
+    coroutine = fetch('k')
+    fetch.assert_called_once_with('k')
+    fetch.assert_not_awaited()
+    assert await coroutine == 42
+    fetch.assert_awaited_once_with('k')
+asyncio.run(main())
+```
+
+autospec 可以发现错误参数数量或名称，通常不检查注解类型和业务规则。AsyncMock 被调用不代表协程被执行，应验证 awaited。patch 必须替换使用方查找名称的位置；已经捕获进默认参数、闭包或别处局部变量的对象，不会被后来改模块属性自动替换。测试时同时观察输出、异常、清理状态，避免只断言“某个方法调用过”。[unittest.mock 参考](https://docs.python.org/3.14/library/unittest.mock.html)
 
 ## 16.3 doctest 与 pytest
 
@@ -5719,6 +6852,97 @@ with closing(sqlite3.connect(":memory:")) as connection:
 | assert 永远执行 | 优化模式可能移除 | 04.9 |
 | 任意异常吞掉就稳定 | 应保留故障证据并在边界处理 | 11 |
 
+### Python 易混点总表：先预测，再定位对应原理
+
+每行给出一个需要区分的概念对；“阅读位置”中的数字是本书节号。详细规则和可执行反例已放回相应章节，避免把所有解释塞成一张背诵表。
+
+| 易混概念 | 必须记住的区别 | 阅读位置 |
+|---|---|---|
+| 名称 / 对象 / 引用 | 重新绑定不修改原对象；原地修改影响别名 | 2.1、5.5 |
+| `is` / `==` | 身份与相等协议；不靠驻留比较字符串 | 2.1、9.2 |
+| del / 销毁 / close | 解除绑定、内存回收、资源关闭各自独立 | 2.1、9.8、11.6 |
+| 不可变 / 可哈希 | 元组含 list 仍不可哈希；身份型可变对象可能可哈希 | 2.10、9.2 |
+| 浅拷贝 / 深拷贝 / 赋值 | 外层复制、对象图复制、共享原对象 | 2.9 |
+| `+=` / `+` | 原地协议可能先修改再在写回时失败 | 2.2 |
+| `/` / `//` / int | 真除、向下取整、转换时向零截断 | 2.3 |
+| bool / int | bool 是 int 子类，相等键可能合并 | 2.3、2.10 |
+| float / Decimal / Fraction | 表示与精度不同；从 float 转换不能补回原意 | 2.4 |
+| round / 业务舍入 | 偶数舍入和浮点表示不能代替明确金额规则 | 2.4、21.14 |
+| None / 空值 / 未提供 | 三者可能有不同业务含义，用哨兵区分 | 4.1、5.3 |
+| str / bytes / bytearray | 文本码点、不可变字节、可变字节 | 2.5、2.8 |
+| 字符 / 码点 / 字节 | 屏幕字符数、len(str)、编码长度不等价 | 2.5 |
+| 原始字符串 / 普通字符串 | r 改变字面量转义，不改变字符串类型 | 1.5、2.6 |
+| strip / removeprefix | 删两端字符集合与删指定前缀 | 2.6 |
+| 单索引 / 切片 | 越界错误与边界截断；反向步长另算 | 3.3 |
+| append / extend / `+` | 加一元素、逐项扩展、创建新列表 | 3.2、3.9 |
+| sort / sorted | 原地返回 None 与返回新列表 | 3.9 |
+| get / setdefault / defaultdict | 是否插入，何时求默认值 | 3.6 |
+| dict.fromkeys / 推导式 | 同一个默认对象与每次创建新对象 | 3.4、3.6 |
+| 视图 / 快照 / 深不可变 | 只读访问不保证底层数据不再改变 | 3.6、8.9 |
+| and/or / bool | 返回短路操作数，不一定返回布尔 | 4.1 |
+| 循环 else / try else | 没有 break 与 try 正常到末尾 | 4.4、11.2 |
+| match 捕获 / 常量 | 裸名称绑定，限定名称才是值模式 | 4.7 |
+| 默认参数 / 调用实参 | 定义时求值与每次调用求值 | 5.3 |
+| 参数解包 / 覆盖字典键 | 调用重复关键字会错，字典构造可覆盖 | 5.4 |
+| global / nonlocal | 当前模块名称与外层函数已有名称 | 5.6 |
+| 类体 / 方法作用域 | 普通方法裸名称不沿类字典查找 | 5.6 |
+| 闭包晚绑定 / 默认参数捕获 | 读共享单元与定义时保存对象 | 5.7 |
+| 装饰器求值 / 应用 / 调用 | 三个时间点、两种不同顺序 | 5.10 |
+| Iterable / Iterator | 可产生迭代器与保存一次消费进度 | 6.1 |
+| 生成器函数 / 生成器表达式 | 函数体延迟与最外层 iterable 立即求值 | 6.3、6.4 |
+| yield / return / yield from | 交付元素、结束携带结果、协议委托 | 6.5、6.6 |
+| groupby / 全局分组 | 只分相邻段，旧组共享底层输入 | 6.8 |
+| import / from import | 模块引用与当时属性对象绑定 | 7.1 |
+| 工作目录 / 源文件目录 / 包上下文 | 文件定位、模块搜索、相对导入规则不同 | 7.3、7.4 |
+| venv / 隔离模式 / 安全沙箱 | 包位置与搜索路径隔离都不是权限沙箱 | 1.2、7.8 |
+| 实例属性 / 类属性 | 遮蔽与共享，另受描述符优先级影响 | 8.2、9.4 |
+| 实例方法 / classmethod / staticmethod | 隐式接收实例、实际调用类或不绑定 | 8.5 |
+| 继承 / super / MRO | super 沿当前实例 MRO 继续，不固定父类 | 8.10 |
+| `__new__` / `__init__` | 创建/返回对象与初始化对象 | 9.6 |
+| property / cached_property | 描述符访问与实例字典缓存，线程行为不同 | 9.5、22.7 |
+| getattr / getattribute / getattr_static | 失败回退、一般访问入口、静态检查 | 9.4、21.6 |
+| 数据 / 非数据描述符 | 是否提供 set/delete 影响实例字典优先级 | 9.5 |
+| 实例特殊属性 / 隐式特殊方法 | 直接属性访问与从类型查协议不同 | 9.3 |
+| NotImplemented / NotImplementedError | 运算协商返回值与异常 | 9.2 |
+| frozen / slots / Final | 字段赋值限制、实例布局、静态声明 | 8.9、9.8、10.9 |
+| Enum 名称 / 值 / 成员 | `E[name]`、`E(value)` 与成员对象 | 8.9 |
+| 类型提示 / 验证 / 转换 | 静态契约、检查输入、构造新值 | 10.1、10.6 |
+| Any / object | 放宽检查与要求使用前收窄 | 10.3 |
+| Optional / 默认参数 / NotRequired | 值可为 None、参数可省、键可缺 | 10.2、10.6 |
+| TypedDict / dataclass | 普通字典结构提示与生成类方法 | 8.8、10.6 |
+| cast / TypeGuard / TypeIs | 静态断言与不同收窄关系 | 10.7 |
+| overload / singledispatch | 静态签名与运行时类型分派 | 10.7 |
+| 延迟注解 / 字符串注解 | 3.14 默认机制与 future 行为不同 | 10.10 |
+| Exception / BaseException | 普通失败与中断、退出、取消信号 | 11.1、14.9 |
+| raise / raise from / from None | 传播、显式原因、隐藏上下文显示 | 11.3 |
+| except / except* | 整个异常对象与异常组匹配部分 | 11.5 |
+| with / 事务 | 管理退出，不自动撤销所有副作用 | 11.6、15.7 |
+| enter 失败 / 块内失败 | 前者不会自动调用同一个管理器的 exit | 11.6 |
+| 可复用 / 可重入 | 先后进入与嵌套进入 | 11.8 |
+| 文本 EOF / None | read 返回空 str/bytes 表示文件尾 | 12.2 |
+| flush / fsync / close | 缓冲传递、系统持久化请求、资源关闭 | 12.2 |
+| astimezone / replace(tzinfo) | 转换同一时间点与更改标签 | 13.3 |
+| 墙上时间 / 单调计时 | 展示时间点与度量超时/耗时 | 13.3 |
+| GIL / 锁 / 原子业务操作 | 解释器约束不等于业务状态保护 | 14.2、14.3 |
+| Thread.run / start / join | 普通调用、启动、等待结束 | 14.3 |
+| Event / Queue / Semaphore | 状态通知、传递项目、并发许可 | 14.3、14.4 |
+| 队列空 / join 完成 / 成功 | 未排队、已结算、业务成功各自验证 | 14.4 |
+| Future 超时 / cancel / 强制停止 | 等待预算、取消请求、终止工作不等价 | 14.5 |
+| spawn / fork / forkserver | 新解释器、状态复制、服务器启动 | 14.6 |
+| coroutine / Task / Future | 一次性执行体、调度实体、结果占位 | 14.7 |
+| await / 并发 / 并行 | 等待协议不保证切换，更不保证多核 | 14.7 |
+| gather / TaskGroup / wait | 结果收集、作用域任务管理、状态等待 | 14.8 |
+| timeout / shield / 回滚 | 取消与保护等待任务不撤销外部副作用 | 14.9 |
+| 线程锁 / asyncio.Lock | 协调对象与阻塞方式不同 | 14.10 |
+| 限并发 / 限速 / 背压 | 在途数量、时间速率、积压容量 | 14.10、22.6 |
+| ContextVar / threading.local | 执行上下文与线程隔离 | 14.11 |
+| mock 被调用 / 被 await | 创建协程与实际执行需分别断言 | 16.2 |
+| assert / 输入校验 | 优化模式可能移除断言 | 4.9、16.8 |
+| 代码对象 / 函数对象 / 执行帧 | 代码、绑定环境、一次运行状态 | 22.3 |
+| 缓存安全 / 只执行一次 | 容器一致性不禁止并发重复计算 | 22.7 |
+
+建议按 [对象模型](docs/tutorial/02-对象模型与基础类型.md)、[函数与作用域](docs/tutorial/05-函数作用域与装饰器.md)、[对象协议](docs/tutorial/09-协议描述符与元编程.md)、[类型提示](docs/tutorial/10-类型提示与泛型.md)、[并发](docs/tutorial/14-线程进程与异步编程.md) 分组做实验，而不是一次背完。
+
 ## 19.13 自测完成标准
 
 能解释对象共享，能独立写带装饰器与类型提示的函数，能实现惰性生成器和资源管理器，能设计事务失败测试，能描述 I/O / CPU 并发模型，能把一个依赖清晰、错误可诊断的工具交付给其他人。达到这些标准后，再按工作目标深入 Web、数据或自动化。
@@ -5752,6 +6976,29 @@ with closing(sqlite3.connect(":memory:")) as connection:
 | 22 | 设计缓存与有界流水线 | 明确大小、生命周期、失败与一致性 |
 
 练习评分可以按四项自评：结果正确、边界明确、资源退出正确、解释清晰。只有正常输入成功而没有失败后状态证据，不能算工程练习完成。
+
+### 基础语义综合自测与答案
+
+先遮住答案，用“何时执行、共享谁、谁清理”说明理由，再运行对应章节的断言。
+
+| 题目 | 答案与原因 | 实验位置 |
+|---|---|---|
+| `items=[[]]*3` 后改 `items[0]`，只影响第一个吗？ | 三个槽指同一内层列表；用推导式逐次构造 | 3.4 |
+| `d.get('exists', expensive())` 会调用 expensive 吗？ | 会，函数调用前先求实参 | 3.6 |
+| 方法中裸写类体定义的 x，会先读类属性吗？ | 普通方法不会；显式用 self.x 或类限定名 | 5.6 |
+| 生成器表达式的 source() 会延迟到 next 才运行吗？ | 最左侧 iterable 表达式立即求值 | 6.4 |
+| dataclass frozen 内部列表能 append 吗？ | 可以；frozen 不递归冻结字段值 | 8.9 |
+| 给实例赋 `__len__`，len(instance) 一定改变吗？ | 不会按普通实例字典规则读取隐式协议 | 9.3 |
+| cast(int, '1') 的结果能直接与整数相加吗？ | 不能，原对象仍为 str | 10.7 |
+| return 一个列表后 finally append，调用者能看见吗？ | 能，返回对象已经选定但仍可修改 | 11.2 |
+| queue.join 返回说明所有项目成功吗？ | 只说明未完成计数归零 | 14.4 |
+| 线程 Future 超时后离开 with 会立刻返回吗？ | 不保证；线程池退出仍可能等待工作 | 14.5 |
+| 同一个 coroutine 能 await 两次吗？同一个 Task 呢？ | 原生协程不能重复驱动完成；Task 可重复取结果 | 14.7 |
+| asyncio 单线程就没有读改写竞争吗？ | await 分开关键操作即可发生交错 | 14.10 |
+| ContextVar 中放 list，就得到任务私有 list 吗？ | 复制绑定并不深拷贝列表 | 14.11 |
+| 缓存函数返回 list，调用者修改后下次命中会怎样？ | 其他调用者能看到同一个缓存对象被修改 | 22.7 |
+
+完成标准：至少能独立写出一次失败路径实验，并断言最终状态；能分别说明语言保证、CPython 现象、目标版本限定和未验证环境。只会复述术语不足以解释真实程序。
 
 
 ---
@@ -5818,6 +7065,28 @@ with closing(sqlite3.connect(":memory:")) as connection:
 | JSON 解析成功但行为错误 | 重复键、NaN、字段和业务约束 | 10.6、12.4 |
 
 查阅时先定位概念，不只搜索异常名称。相同 TypeError 可以来自参数绑定、类型协议、描述符或错误数据；最后一个异常消息通常只描述直接失败点，还需要结合调用栈和资源状态。
+
+### 对照 Python 官网教程的基础覆盖表（2026-10-26）
+
+本次以官网教程作为主线，再用语言参考、HOWTO 和标准库参考补齐教程有意略写的对象协议、类型提示与并发。以下“覆盖”指教材主题已讲解且有例子或明确交叉引用，不表示逐项复制所有标准库 API。
+
+| 官网教程主题 | 本项目阅读位置 | 本次核对重点 |
+|---|---|---|
+| 课前说明、解释器使用 | 00、01 | 语言与实现、版本、命令与启动上下文 |
+| 数字、文本、列表 | 02、03 | 身份与相等、精度、编码、共享与切片 |
+| 控制流与函数定义 | 04、05 | 短路、else、模式捕获、参数绑定、作用域 |
+| 数据结构 | 03、06、21 | 原地操作、默认值、迭代、排序与消费 |
+| 模块和包 | 07 | import 缓存、相对导入、模块入口、文件路径 |
+| 输入输出 | 02.7、12、13 | 格式化、文本/字节流、JSON、资源所有权 |
+| 错误和异常 | 11 | 传播、异常链、异常组、with 与清理 |
+| 类 | 08、09 | 名称空间、继承、MRO、描述符与绑定 |
+| 标准库简介两部分 | 12、13、16、21 | 文件、CLI、时间、正则、日志、测试、弱引用、线程 |
+| 虚拟环境和包 | 01.2、07 | 解释器归属、依赖位置、安装与导入区别 |
+| 后续学习与交互补充 | 00、01.3、20 | 用 help/dir/官方索引继续查阅 |
+| 浮点算术 | 02.4、19.3、21.14 | 二进制误差、近零容差、NaN 与舍入 |
+| 附录中的交互启动 | 01.3、07.4、21.9 | REPL 与脚本环境不同，不作为生产入口依赖 |
+
+主线来源：[官方 3.14 教程目录](https://docs.python.org/3.14/tutorial/index.html)。基础阶段可完整学习 01—14、16、19—22 中的语言与标准库主题；15 章只选 urllib/socket/sqlite3，18 章只选 Python 运行时特性。已有框架示例属于历史扩展内容，不是本次基础补全的前置知识。
 
 ## 20.2 关键字导航
 
@@ -5915,6 +7184,29 @@ with closing(sqlite3.connect(":memory:")) as connection:
 | Web 资源生命周期 | [FastAPI lifespan](https://fastapi.tiangolo.com/advanced/events/) | 启动资源、请求工作单元、关闭 |
 
 技术规则以官方资料为依据，教学选择、案例设计和审阅结论是结合当前仓库作出的分析。参考某个协议文档不代表本地已经部署该协议的全部实现。
+
+### 2026-10-26 基础补全的官方来源与定位
+
+本次实际读取官网教程入口，并逐项打开下面的官方专题页面核对关键语义。`/3/` 会随发布改变，因此新增引用优先固定 `/3.14/`；本地运行 CPython 3.14.5，在线页面补丁版可能更新。以下是本次记录，前面的 2026-10-20 记录保留为历史。
+
+| 补充领域 | 官方资料 | 教材位置 |
+|---|---|---|
+| 对象、相等、运算和特殊方法 | [数据模型](https://docs.python.org/3.14/reference/datamodel.html)、[表达式](https://docs.python.org/3.14/reference/expressions.html) | 02、03、09、21 |
+| 定义、绑定和控制流 | [控制流教程](https://docs.python.org/3.14/tutorial/controlflow.html)、[简单语句](https://docs.python.org/3.14/reference/simple_stmts.html)、[复合语句](https://docs.python.org/3.14/reference/compound_stmts.html) | 01、04、05、11 |
+| 作用域、闭包和执行帧 | [执行模型](https://docs.python.org/3.14/reference/executionmodel.html) | 05、10、22 |
+| 模块生命周期 | [模块教程](https://docs.python.org/3.14/tutorial/modules.html)、[导入系统](https://docs.python.org/3.14/reference/import.html) | 07 |
+| 继承、绑定和描述符 | [类教程](https://docs.python.org/3.14/tutorial/classes.html)、[描述符指南](https://docs.python.org/3.14/howto/descriptor.html) | 08、09 |
+| 数据对象与枚举 | [dataclasses](https://docs.python.org/3.14/library/dataclasses.html)、[enum](https://docs.python.org/3.14/library/enum.html) | 08 |
+| 静态类型与注解反射 | [typing](https://docs.python.org/3.14/library/typing.html)、[annotationlib](https://docs.python.org/3.14/library/annotationlib.html) | 10 |
+| 迭代、缓存、对象生命周期 | [itertools](https://docs.python.org/3.14/library/itertools.html)、[functools](https://docs.python.org/3.14/library/functools.html)、[weakref](https://docs.python.org/3.14/library/weakref.html) | 06、09、22 |
+| 文件与资源退出 | [io](https://docs.python.org/3.14/library/io.html)、[contextlib](https://docs.python.org/3.14/library/contextlib.html) | 11、12 |
+| 线程、队列和结果对象 | [threading](https://docs.python.org/3.14/library/threading.html)、[queue](https://docs.python.org/3.14/library/queue.html)、[futures](https://docs.python.org/3.14/library/concurrent.futures.html) | 14.1—14.5 |
+| 进程与构建差异 | [multiprocessing](https://docs.python.org/3.14/library/multiprocessing.html)、[自由线程](https://docs.python.org/3.14/howto/free-threading-python.html) | 14.2、14.6、22.9 |
+| 协程与退出 | [Tasks](https://docs.python.org/3.14/library/asyncio-task.html)、[Runners](https://docs.python.org/3.14/library/asyncio-runner.html) | 14.7—14.9、14.12 |
+| 异步共享状态 | [同步原语](https://docs.python.org/3.14/library/asyncio-sync.html)、[异步队列](https://docs.python.org/3.14/library/asyncio-queue.html)、[ContextVar](https://docs.python.org/3.14/library/contextvars.html) | 14.10—14.11 |
+| 测试中的调用契约 | [unittest.mock](https://docs.python.org/3.14/library/unittest.mock.html) | 16.2 |
+
+易混知识对照集中在 [19 练习与迁移陷阱](docs/tutorial/19-练习答案与迁移陷阱.md) 的 19.12 节；运行数量、平台范围和未验证内容以 [验证记录](docs/validation.md) 为准。
 
 ## 20.6 学完后如何继续
 
@@ -6278,6 +7570,27 @@ assert Matrix() @ Matrix() == "matrix product"
 
 `@` 在表达式里表示矩阵乘法协议，在 def / class 前表示装饰器，两者语法位置不同。赋值表达式、条件表达式和短路有不同优先级，复杂组合务必加括号。
 
+### 内置函数的边界值：空输入、截断和进制转换
+
+<!-- verify: run -->
+```python
+assert all([]) is True and any([]) is False
+assert list(zip([1, 2], ['a'])) == [(1, 'a')]
+try:
+    list(zip([1, 2], ['a'], strict=True))
+except ValueError:
+    pass
+else:
+    raise AssertionError('长度不一致不能静默截断')
+assert min([], default=None) is None
+assert int('010') == 10
+assert int('0x10', 0) == 16
+assert divmod(-7, 3) == (-3, 2)
+assert round(2.5) == 2 and round(3.5) == 4
+```
+
+all 的空输入为真，可能让“所有字段合法”在根本没有字段时错误通过，需另外判断必填或非空。zip 默认以最短输入为准；要求一一对应时用 strict（3.10+）。min/max 的 default 只处理空 iterable，不处理不可比较元素。`int(text, 0)` 按前缀推断进制，不意味着接受所有带前导零文本。round 的偶数舍入叠加浮点表示误差，不能替代明确的十进制金额规则。
+
 
 ---
 
@@ -6341,6 +7654,28 @@ print(dis.Bytecode(add).dis())
 ```
 
 字节码是 CPython 实现细节，指令、缓存和优化会跨版本改变；不要把特定 opcode 列表当语言契约。性能结论需要真实测量，看到几条字节码不意味着知道完整运行成本。参考 [dis 文档](https://docs.python.org/3.14/library/dis.html)。
+
+### 函数对象、代码对象、闭包单元和执行帧
+
+<!-- verify: run -->
+```python
+def make(offset):
+    def apply(value):
+        return value + offset
+    return apply
+
+a, b = make(10), make(20)
+assert a.__code__ is b.__code__
+assert a(1) == 11 and b(1) == 21
+assert a.__code__.co_freevars == ('offset',)
+assert a.__closure__[0].cell_contents == 10
+assert b.__closure__[0].cell_contents == 20
+assert a.__globals__ is globals()
+```
+
+代码对象描述待执行代码；函数对象把代码、全局命名空间、默认参数和闭包等组合起来；一次调用建立运行帧并保存局部状态。相同代码不意味着相同闭包值。生成器和协程会把暂停所需状态保留下来，所以未关闭的对象也可能间接保留大容器或资源。
+
+`locals()` 在函数等优化作用域中的结果不能当成修改真实局部变量的通用接口，3.13 已明确其快照语义；模块 globals 则是实际命名空间字典。调试器、traceback、frame 引用都可能延长局部对象生命周期。递归深度限制是运行环境保护，Python 不保证尾调用消除，深链遍历通常用显式栈。[执行模型](https://docs.python.org/3.14/reference/executionmodel.html)
 
 ## 22.4 统一业务边界：策略与依赖注入
 
@@ -6567,6 +7902,38 @@ assert compute_price.cache_info().currsize == 2
 
 函数级缓存适合确定性纯计算。查询缓存涉及数据更新和权限边界，应先定义一致性目标。增加一个 version 参数只有在调用方可靠获得并正确传递版本时才有意义。
 
+### 缓存不仅保存结果，还改变对象所有权
+
+<!-- verify: run -->
+```python
+from functools import lru_cache, cached_property
+@lru_cache(maxsize=2)
+def values(key):
+    return []
+first = values('a')
+first.append(1)
+assert values('a') is first
+assert values('a') == [1]
+values.cache_clear()
+assert values('a') == []
+
+class Item:
+    def __init__(self):
+        self.calls = 0
+    @cached_property
+    def value(self):
+        self.calls += 1
+        return self.calls
+item = Item()
+assert item.value == item.value == 1
+del item.value
+assert item.value == 2
+```
+
+lru_cache 保留参数和结果引用，可变返回值被所有命中者共享；方法缓存的 key 通常包含 self，可能延长实例生命。缓存内部线程安全不保证同一未命中工作只执行一次；有副作用的函数不适合直接套缓存。不要直接缓存协程对象或生成器对象：它们有一次性执行/消费状态。
+
+cached_property 将值存入实例字典，3.12+ 不再提供旧实现中的隐式锁；需要“只初始化一次”时自行同步。缓存大小、有效期和主动失效是不同维度，lru_cache 的 maxsize 不是 TTL。[functools 参考](https://docs.python.org/3.14/library/functools.html)
+
 ## 22.8 生命周期优先于魔法
 
 服务资源通常在应用启动时创建，在关闭时释放；请求级对象在请求范围内创建与回收。类全局连接、导入时初始化服务和无界后台任务会使测试、重载与多进程运行复杂化。
@@ -6595,6 +7962,17 @@ assert resources["audit"].closed
 子解释器、可选 JIT 和自由线程属于解释器演进专题，是否可用、如何启用以及扩展是否兼容都取决于版本和构建。多解释器不等价于让所有对象可安全共享；原生扩展的全局状态和对象所有权仍是问题。
 
 初次学习应先稳定理解语言协议、进程隔离和异步取消。需要特定部署优化时，再针对实际构建阅读 [对应版本新增特性](https://docs.python.org/3/whatsnew/3.14.html)，进行基准和兼容测试。本书不声称涵盖所有解释器内部实现。
+
+### 语言保证、CPython 实现和可选构建分层阅读
+
+| 层次 | 例子 | 学习时应怎么使用 |
+|---|---|---|
+| 语言语义 | 名称绑定、比较协议、with 退出规则 | 用来解释跨实现程序行为 |
+| CPython 实现 | 引用计数、具体字节码、对象布局 | 调试和测量可用，勿当永久语言承诺 |
+| 版本特性 | 3.14 延迟注解、InterpreterPoolExecutor | 标注最低版本并验证部署环境 |
+| 构建选项 | 自由线程、实验性 JIT | 确认编译选项、启用状态和依赖兼容性 |
+
+3.14 的 InterpreterPoolExecutor 在不同线程中的独立解释器运行任务，可使用各解释器的 GIL 实现多核执行；模块、全局状态和导入环境隔离，任务与结果的传输仍有序列化等限制。它不是“共享一个普通全局字典却完全不用锁”的线程池。JIT 改变执行实现，不改变对象可变性、取消协议或资源所有权。这里提供选择边界，不把未运行的构建性能写成验证结论。
 
 ## 22.10 一个可维护 Python 模块的完成条件
 
