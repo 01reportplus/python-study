@@ -1,5 +1,53 @@
 # 教程验证记录
 
+## Python 基础补全（2026-10-26）
+
+本次对照 Python 官网教程、固定 3.14 系列语言参考、HOWTO 与标准库文档扩写。仅增加 Python 语言和标准库基础内容；原有第三方框架部分不扩写。正文来源仍为 `docs/tutorial/`，合订版和网站下载从同一份正文生成。
+
+### 内容与结构
+
+- 保留 23 章文件名、章标题、222 个二级节及原顺序；20 章有内容补充或导读更新。
+- 在 56 个原有二级节下补充专题，并更新 00 章的基础学习范围和版本表。
+- 分章正文从 181,636 字符增至 228,852 字符，新增 47,216 字符（含代码、标点、表格和链接，不是纯中文字数）。
+- Python 代码块从 241 个增至 287 个；实际执行从 218 个增至 264 个，新增 46 个可自动执行示例。其余 23 个仍仅编译检查。
+- 19.12 节增加 82 组易混概念对照，19.13 节补充综合自测；20.1 节对照官网教程主题，20.5 节记录本次官方来源。
+- 校验修改前快照，`main.py` 和 `examples/*.py` 的 SHA-256 保持一致；第 15、17、18 章正文未修改。
+- 文件围栏配对、章标题/二级目录、替换字符和 Git 空白检查通过。结构检查只把 Markdown 标题计入目录，不将代码围栏内的 Python 注释误认为标题。
+
+### 实际运行环境与检查结果
+
+Windows / CPython **3.14.5**。教程块由 `D:\develop\env\python\python.exe` 执行；站点构建使用项目 `.venv\Scripts\python.exe`（同为 3.14.5），MkDocs 1.6.1。
+
+```text
+python -B scripts/build_book.py
+chapters=23
+
+python -B scripts/verify_tutorial.py
+documents=28 python_blocks=287 executed=264 local_links=81
+failures=0
+
+python -B -m unittest discover -s examples -p 'test_*.py' -v
+Ran 12 tests
+OK
+```
+
+新执行示例覆盖：定义/装饰/调用时机、方法绑定、MRO 参数协作、dataclass 字段分类、Enum 别名、运算协商、特殊方法类型查找、延迟注解、异常组剩余错误、异步资源逆序清理、Future 超时后仍运行、队列关闭、协程重复等待、shield、单线程异步竞争、ContextVar 共享对象、缓存返回对象共享，以及真实文件的 `python -m` 包入口。
+
+**新增 14.6 的 spawn 示例已真实启动子进程**，验证参数经传输后对子列表的修改不影响父进程列表。旧进程池教学块仍仅做语法检查；不能把一项新增进程实验表述为全部进程模式均已验证。
+
+站点检查使用 `mkdocs build --strict` 和 `scripts/verify_site.py`，覆盖默认根路径与 `https://example.github.io/python-study01/` 子路径，检查 28 个 HTML 页面、23 个章节，以及站内锚点、canonical、搜索索引、下载和静态资源。构建产物中的合订版下载与本地生成文件另作字节一致性检查。Material 输出了上游 MkDocs 2.0 的提示信息，本次仍使用已有 MkDocs 1.6.1。
+
+### 验证边界
+
+- 标记代码块在独立 UTF-8 解释器和临时目录中执行，通过 assert 检查行为；未标记块只编译。`tmp/` 用于当前环境的临时文件，测试命令把 TMP/TEMP 指向该目录。
+- 本次新增示例只使用标准库，不访问外部业务服务、不安装第三方框架。
+- 没有运行 mypy/Pyright、wheel 构建安装、真实外部 HTTP/数据库服务、自由线程构建、InterpreterPoolExecutor 或实验性 JIT。
+- 没有验证 Python 3.11—3.13、Linux/macOS，也没有发布站点或运行线上 GitHub Actions。版本适用范围由正文标注，实际执行结论限定为本机版本。
+- 网站检查是构建和 HTML/链接检查，本次没有重新进行浏览器交互或截图验收。
+- 官方来源已用于语义核对，不代表已逐页审阅全部官方站点；教程主题覆盖不等于标准库全部 API 或解释器内部实现的穷举。
+
+下面保留 2026-10-20 的历史记录，其中运行数量和“未执行进程池”等表述属于当时状态，本次结果以上文为准。
+
 > 以下记录保留 2026-10-20 教程内容扩写时的验证结果。GitHub Pages 整理后，章节路径为
 > `docs/tutorial/`，本记录路径为 `docs/validation.md`；站点构建与检查命令见
 > [构建与发布](deployment.md)。文中“原有 .gitignore 未修改”等描述指当时的内容扩写，
